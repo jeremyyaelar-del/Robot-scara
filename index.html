@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot SCARA - Interfaz de Trayectorias</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Panel de herramientas fijo -->
+        <div class="toolbar">
+            <h1>Robot SCARA - Editor de Trayectorias</h1>
+            
+            <div class="control-group">
+                <h3>Configuración del Canvas</h3>
+                <label>
+                    Ancho (cm):
+                    <input type="number" id="canvasWidth" value="100" min="10" max="500">
+                </label>
+                <label>
+                    Alto (cm):
+                    <input type="number" id="canvasHeight" value="100" min="10" max="500">
+                </label>
+                <button id="applyCanvasSize">Aplicar Tamaño</button>
+            </div>
+
+            <div class="control-group">
+                <h3>Herramientas de Dibujo</h3>
+                <button id="drawMode" class="active">Modo Dibujar</button>
+                <button id="rulerMode">Modo Regla</button>
+                <button id="clearCanvas">Limpiar Canvas</button>
+            </div>
+
+            <div class="control-group">
+                <h3>Gestión de Trayectorias</h3>
+                <button id="saveCoordinates">Guardar Coordenadas</button>
+                <button id="loadJSON">Cargar JSON</button>
+                <input type="file" id="jsonFileInput" accept=".json" style="display: none;">
+            </div>
+
+            <div class="control-group">
+                <h3>Información</h3>
+                <div id="coordinatesInfo">
+                    <p>Puntos dibujados: <span id="pointCount">0</span></p>
+                    <p>Distancia medida: <span id="rulerDistance">0.00 cm</span></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Área de canvas con scroll -->
+        <div class="canvas-container">
+            <div class="canvas-wrapper" id="canvasWrapper">
+                <canvas id="drawingCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
