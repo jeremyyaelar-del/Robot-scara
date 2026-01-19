@@ -9,6 +9,10 @@ from tkinter import ttk, filedialog, messagebox
 import json
 import math
 
+# Constants
+# Standard DPI conversion: 1 inch = 25.4 mm, 96 DPI is standard screen resolution
+PX_PER_MM = 3.78  # Approximately 96 DPI (can be calibrated for specific displays)
+
 
 class RobotDrawingGUI:
     def __init__(self, root):
@@ -39,9 +43,6 @@ class RobotDrawingGUI:
         # Storage for drawn items
         self.drawn_items = []
         self.loaded_paths = []
-        
-        # Pixels per millimeter (approximate, can be calibrated)
-        self.px_per_mm = 3.78  # ~96 DPI
         
         self.setup_ui()
         self.bind_events()
@@ -150,7 +151,7 @@ class RobotDrawingGUI:
         
         if unit == "mm":
             # Convert mm to pixels
-            self.line_width = value * self.px_per_mm
+            self.line_width = value * PX_PER_MM
             self.line_width_unit = "mm"
         else:
             self.line_width = value
@@ -161,6 +162,10 @@ class RobotDrawingGUI:
     def get_scaled_coords(self, x, y):
         """Get coordinates scaled by zoom level"""
         return x / self.zoom_level, y / self.zoom_level
+    
+    def get_zoomed_line_width(self):
+        """Get line width scaled by current zoom level"""
+        return self.line_width * self.zoom_level
     
     def on_mouse_down(self, event):
         """Handle mouse button press"""
@@ -180,7 +185,7 @@ class RobotDrawingGUI:
             line = self.canvas.create_line(
                 self.last_x * self.zoom_level, self.last_y * self.zoom_level,
                 x * self.zoom_level, y * self.zoom_level,
-                width=self.line_width * self.zoom_level,
+                width=self.get_zoomed_line_width(),
                 fill=self.line_color,
                 capstyle=tk.ROUND,
                 smooth=True
@@ -197,7 +202,7 @@ class RobotDrawingGUI:
                 self.temp_item = self.canvas.create_line(
                     self.start_x * self.zoom_level, self.start_y * self.zoom_level,
                     x * self.zoom_level, y * self.zoom_level,
-                    width=self.line_width * self.zoom_level,
+                    width=self.get_zoomed_line_width(),
                     fill=self.line_color
                 )
             
@@ -206,7 +211,7 @@ class RobotDrawingGUI:
                     self.start_x * self.zoom_level, self.start_y * self.zoom_level,
                     x * self.zoom_level, y * self.zoom_level,
                     outline=self.line_color,
-                    width=self.line_width * self.zoom_level
+                    width=self.get_zoomed_line_width()
                 )
             
             elif self.drawing_mode == "circle":
@@ -218,7 +223,7 @@ class RobotDrawingGUI:
                     (self.start_x + radius) * self.zoom_level,
                     (self.start_y + radius) * self.zoom_level,
                     outline=self.line_color,
-                    width=self.line_width * self.zoom_level
+                    width=self.get_zoomed_line_width()
                 )
     
     def on_mouse_up(self, event):
@@ -296,7 +301,7 @@ class RobotDrawingGUI:
             line = self.canvas.create_line(
                 p1["x"] * self.zoom_level, p1["y"] * self.zoom_level,
                 p2["x"] * self.zoom_level, p2["y"] * self.zoom_level,
-                width=self.line_width * self.zoom_level,
+                width=self.get_zoomed_line_width(),
                 fill="blue"
             )
             self.loaded_paths.append(line)
@@ -307,7 +312,7 @@ class RobotDrawingGUI:
             line = self.canvas.create_line(
                 line_data["x1"] * self.zoom_level, line_data["y1"] * self.zoom_level,
                 line_data["x2"] * self.zoom_level, line_data["y2"] * self.zoom_level,
-                width=self.line_width * self.zoom_level,
+                width=self.get_zoomed_line_width(),
                 fill="blue"
             )
             self.loaded_paths.append(line)

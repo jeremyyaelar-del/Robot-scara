@@ -7,6 +7,13 @@ This script demonstrates the functionality without requiring a display
 import json
 import math
 
+# Import the constant from robot_gui
+try:
+    from robot_gui import PX_PER_MM
+except ImportError:
+    # Fallback if running standalone
+    PX_PER_MM = 3.78
+
 
 def demo_freehand_mode():
     """Demonstrate freehand drawing mode"""
@@ -74,8 +81,6 @@ def demo_line_width():
     print("DEMO: Ajuste de Grosor de Línea")
     print("=" * 60)
     
-    px_per_mm = 3.78
-    
     print("\nConversiones píxeles ↔ milímetros:")
     test_values = [
         (1, 'mm'), (2, 'mm'), (5, 'mm'),
@@ -84,10 +89,10 @@ def demo_line_width():
     
     for value, unit in test_values:
         if unit == 'mm':
-            px = value * px_per_mm
+            px = value * PX_PER_MM
             print(f"   {value} mm = {px:.2f} px")
         else:
-            mm = value / px_per_mm
+            mm = value / PX_PER_MM
             print(f"   {value} px = {mm:.2f} mm")
     
     print("\n✓ Conversión de unidades funcionando correctamente\n")

@@ -8,6 +8,13 @@ import json
 import sys
 import math
 
+# Import the constant from robot_gui
+try:
+    from robot_gui import PX_PER_MM
+except ImportError:
+    # Fallback if running standalone
+    PX_PER_MM = 3.78
+
 
 def test_json_loading():
     """Test that all example JSON files can be loaded"""
@@ -59,19 +66,17 @@ def test_line_width_conversion():
     """Test line width conversion between px and mm"""
     print("\nTesting line width conversion...")
     
-    px_per_mm = 3.78  # ~96 DPI
-    
     # Test mm to px conversion
     test_cases = [
-        (1, 'mm', 1 * px_per_mm),
-        (5, 'mm', 5 * px_per_mm),
+        (1, 'mm', 1 * PX_PER_MM),
+        (5, 'mm', 5 * PX_PER_MM),
         (10, 'px', 10),
         (2.5, 'px', 2.5),
     ]
     
     for value, unit, expected in test_cases:
         if unit == 'mm':
-            result = value * px_per_mm
+            result = value * PX_PER_MM
         else:
             result = value
         
