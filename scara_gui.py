@@ -162,7 +162,7 @@ class ScaraGUI:
                     f.write("# Formato: x, y\n")
                     f.write("\n")
                     
-                    for i, (x, y) in enumerate(self.coordinates):
+                    for x, y in self.coordinates:
                         f.write(f"{x}, {y}\n")
                         
                 messagebox.showinfo(

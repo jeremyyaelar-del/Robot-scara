@@ -6,6 +6,7 @@ Este script simula el uso de la GUI sin necesitar una pantalla
 
 import sys
 import os
+import tempfile
 
 # Agregar el directorio actual al path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,8 +44,8 @@ def test_file_save():
     print("✓ Probando guardado de archivo...")
     coords = [(100, 200), (150, 250), (200, 300)]
     
-    # Crear archivo de prueba
-    test_file = "/tmp/test_coords.txt"
+    # Crear archivo de prueba con ruta multiplataforma
+    test_file = os.path.join(tempfile.gettempdir(), 'test_coords.txt')
     try:
         with open(test_file, 'w') as f:
             f.write("# Coordenadas del Robot SCARA\n")
