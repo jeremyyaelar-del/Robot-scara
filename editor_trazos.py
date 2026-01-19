@@ -41,7 +41,6 @@ class EditorTrazos:
         self.current_tool = "brush"  # brush, eraser, line, circle, rectangle, triangle
         self.brush_size = 2  # en píxeles
         self.brush_color = "#000000"
-        self.unit_type = "pixels"  # pixels o cm
         self.canvas_width_cm = 30
         self.canvas_height_cm = 20
         self.show_guides = tk.BooleanVar(value=True)
@@ -251,11 +250,11 @@ class EditorTrazos:
             if unit == "cm":
                 # Convertir cm a píxeles
                 self.brush_size = size_value * self.PIXELS_PER_CM
+                # Actualizar el control deslizante al valor en píxeles
+                self.size_scale.set(int(self.brush_size))
             else:
                 self.brush_size = size_value
-                
-            # Actualizar el control deslizante
-            if unit == "pixels":
+                # Actualizar el control deslizante
                 self.size_scale.set(int(size_value))
         except ValueError:
             pass
@@ -479,19 +478,25 @@ class EditorTrazos:
         )
         
         if filename:
-            data = {
-                "canvas_size": {
-                    "width_cm": float(self.canvas_width_var.get()),
-                    "height_cm": float(self.canvas_height_var.get())
-                },
-                "strokes": self.strokes,
-                "shapes": self.shapes
-            }
-            
             try:
+                # Validar que los valores del canvas sean numéricos
+                width_cm = float(self.canvas_width_var.get())
+                height_cm = float(self.canvas_height_var.get())
+                
+                data = {
+                    "canvas_size": {
+                        "width_cm": width_cm,
+                        "height_cm": height_cm
+                    },
+                    "strokes": self.strokes,
+                    "shapes": self.shapes
+                }
+                
                 with open(filename, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 messagebox.showinfo("Éxito", "Archivo guardado correctamente.")
+            except ValueError as e:
+                messagebox.showerror("Error", f"Valores de tamaño de canvas inválidos: {str(e)}")
             except (IOError, PermissionError) as e:
                 messagebox.showerror("Error", f"Error al guardar archivo: {str(e)}")
             except (TypeError, ValueError) as e:
@@ -530,14 +535,15 @@ class EditorTrazos:
                         continue
                     if not all(key in stroke for key in ["points", "color", "width"]):
                         continue
-                        
+                    
+                    # Validar y agregar el trazo
+                    self.strokes.append(stroke)
+                    
+                    # Dibujar trazo en el canvas
                     points = stroke["points"]
                     color = stroke["color"]
                     width = stroke["width"]
                     
-                    self.strokes.append(stroke)
-                    
-                    # Dibujar trazo
                     for i in range(len(points) - 1):
                         x1, y1 = points[i]
                         x2, y2 = points[i + 1]
