@@ -1,5 +1,7 @@
 // Constantes
 const CM_TO_PIXELS = 3.7795275591; // 1 cm = ~3.78 pixels (96 DPI)
+const MIN_CANVAS_SIZE = 10; // Tamaño mínimo del canvas en cm
+const MAX_CANVAS_SIZE = 500; // Tamaño máximo del canvas en cm
 
 // Variables globales
 let canvas, ctx;
@@ -55,12 +57,13 @@ function applyCanvasSize() {
     const newWidth = parseFloat(document.getElementById('canvasWidth').value);
     const newHeight = parseFloat(document.getElementById('canvasHeight').value);
     
-    if (newWidth >= 10 && newWidth <= 500 && newHeight >= 10 && newHeight <= 500) {
+    if (newWidth >= MIN_CANVAS_SIZE && newWidth <= MAX_CANVAS_SIZE && 
+        newHeight >= MIN_CANVAS_SIZE && newHeight <= MAX_CANVAS_SIZE) {
         canvasWidthCm = newWidth;
         canvasHeightCm = newHeight;
         updateCanvasSize();
     } else {
-        alert('Por favor, ingrese valores válidos entre 10 y 500 cm.');
+        alert(`Por favor, ingrese valores válidos entre ${MIN_CANVAS_SIZE} y ${MAX_CANVAS_SIZE} cm.`);
     }
 }
 
@@ -263,6 +266,13 @@ function saveCoordinates() {
 function loadJSONFile(event) {
     const file = event.target.files[0];
     if (!file) return;
+    
+    // Validate file extension
+    if (!file.name.toLowerCase().endsWith('.json')) {
+        alert('Por favor, seleccione un archivo JSON válido.');
+        event.target.value = ''; // Reset file input
+        return;
+    }
     
     const reader = new FileReader();
     reader.onload = function(e) {
