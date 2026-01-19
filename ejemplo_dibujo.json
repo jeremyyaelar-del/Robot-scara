@@ -1,0 +1,64 @@
+{
+  "canvas_size": {
+    "width_cm": 30,
+    "height_cm": 20
+  },
+  "strokes": [
+    {
+      "type": "brush",
+      "points": [
+        [100, 100],
+        [105, 102],
+        [110, 105],
+        [115, 110],
+        [120, 115],
+        [125, 120],
+        [130, 125]
+      ],
+      "color": "#FF0000",
+      "width": 5
+    },
+    {
+      "type": "brush",
+      "points": [
+        [200, 150],
+        [205, 155],
+        [210, 160],
+        [215, 165],
+        [220, 170]
+      ],
+      "color": "#00FF00",
+      "width": 3
+    }
+  ],
+  "shapes": [
+    {
+      "type": "circle",
+      "start": [300, 200],
+      "end": [350, 250],
+      "color": "#0000FF",
+      "width": 2
+    },
+    {
+      "type": "rectangle",
+      "start": [400, 100],
+      "end": [500, 200],
+      "color": "#FF00FF",
+      "width": 3
+    },
+    {
+      "type": "line",
+      "start": [50, 50],
+      "end": [150, 150],
+      "color": "#000000",
+      "width": 2
+    },
+    {
+      "type": "triangle",
+      "start": [600, 200],
+      "end": [700, 300],
+      "color": "#FFA500",
+      "width": 4
+    }
+  ]
+}
