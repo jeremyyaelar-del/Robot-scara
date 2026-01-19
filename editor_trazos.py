@@ -22,7 +22,8 @@ import math
 class EditorTrazos:
     """Aplicación principal del editor de trazos interactivo."""
     
-    # Constante de conversión: píxeles por centímetro (aproximado)
+    # Constante de conversión: píxeles por centímetro
+    # Basado en 96 DPI estándar: 96 DPI ÷ 2.54 cm/inch = 37.795 px/cm
     PIXELS_PER_CM = 37.795275591
     
     def __init__(self, root):
@@ -233,7 +234,8 @@ class EditorTrazos:
     def _set_tool(self, tool):
         """Establece la herramienta actual."""
         self.current_tool = tool
-        messagebox.showinfo("Herramienta", f"Herramienta actual: {tool}")
+        # Actualizar visualmente sin diálogos molestos
+        # En una versión futura, se podría resaltar el botón activo
         
     def _on_size_scale(self, value):
         """Actualiza el tamaño del pincel desde el control deslizante."""
@@ -298,8 +300,16 @@ class EditorTrazos:
         self.canvas.delete("guide")
         
         # Obtener dimensiones del canvas
-        width = int(self.canvas.cget("scrollregion").split()[2])
-        height = int(self.canvas.cget("scrollregion").split()[3])
+        scrollregion = self.canvas.cget("scrollregion")
+        if not scrollregion:
+            return
+            
+        parts = scrollregion.split()
+        if len(parts) < 4:
+            return
+            
+        width = int(parts[2])
+        height = int(parts[3])
         
         # Dibujar líneas de cuadrícula cada 1 cm
         cm_px = self.PIXELS_PER_CM
@@ -482,8 +492,10 @@ class EditorTrazos:
                 with open(filename, 'w', encoding='utf-8') as f:
                     json.dump(data, f, indent=2, ensure_ascii=False)
                 messagebox.showinfo("Éxito", "Archivo guardado correctamente.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al guardar: {str(e)}")
+            except (IOError, PermissionError) as e:
+                messagebox.showerror("Error", f"Error al guardar archivo: {str(e)}")
+            except (TypeError, ValueError) as e:
+                messagebox.showerror("Error", f"Error al serializar datos: {str(e)}")
                 
     def _load_json(self):
         """Carga trazos y formas desde un archivo JSON."""
@@ -495,22 +507,35 @@ class EditorTrazos:
             try:
                 with open(filename, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                
+                # Validar estructura básica del JSON
+                if not isinstance(data, dict):
+                    raise ValueError("El archivo JSON debe contener un objeto")
                     
                 # Limpiar canvas actual
                 self._clear_canvas()
                 
                 # Restaurar tamaño del canvas
-                if "canvas_size" in data:
-                    self.canvas_width_var.set(str(data["canvas_size"]["width_cm"]))
-                    self.canvas_height_var.set(str(data["canvas_size"]["height_cm"]))
-                    self._update_canvas_size()
+                if "canvas_size" in data and isinstance(data["canvas_size"], dict):
+                    canvas_size = data["canvas_size"]
+                    if "width_cm" in canvas_size and "height_cm" in canvas_size:
+                        self.canvas_width_var.set(str(canvas_size["width_cm"]))
+                        self.canvas_height_var.set(str(canvas_size["height_cm"]))
+                        self._update_canvas_size()
                     
-                # Cargar trazos
-                self.strokes = data.get("strokes", [])
-                for stroke in self.strokes:
+                # Cargar trazos con validación
+                self.strokes = []
+                for stroke in data.get("strokes", []):
+                    if not isinstance(stroke, dict):
+                        continue
+                    if not all(key in stroke for key in ["points", "color", "width"]):
+                        continue
+                        
                     points = stroke["points"]
                     color = stroke["color"]
                     width = stroke["width"]
+                    
+                    self.strokes.append(stroke)
                     
                     # Dibujar trazo
                     for i in range(len(points) - 1):
@@ -522,14 +547,24 @@ class EditorTrazos:
                                               capstyle=tk.ROUND,
                                               smooth=True)
                         
-                # Cargar formas
-                self.shapes = data.get("shapes", [])
-                for shape in self.shapes:
+                # Cargar formas con validación
+                self.shapes = []
+                for shape in data.get("shapes", []):
+                    if not isinstance(shape, dict):
+                        continue
+                    if not all(key in shape for key in ["type", "start", "end", "color", "width"]):
+                        continue
+                    
+                    self.shapes.append(shape)
                     self._draw_shape(shape)
                     
                 messagebox.showinfo("Éxito", "Archivo cargado correctamente.")
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al cargar: {str(e)}")
+            except (IOError, PermissionError) as e:
+                messagebox.showerror("Error", f"Error al leer archivo: {str(e)}")
+            except json.JSONDecodeError as e:
+                messagebox.showerror("Error", f"Error al decodificar JSON: {str(e)}")
+            except (ValueError, KeyError, TypeError) as e:
+                messagebox.showerror("Error", f"Formato de archivo inválido: {str(e)}")
                 
     def _clear_canvas(self):
         """Limpia todos los trazos del canvas."""
