@@ -1,0 +1,3 @@
+# Python dependencies for Robot SCARA GUI
+# Tkinter is included with standard Python installation
+# No additional dependencies required
