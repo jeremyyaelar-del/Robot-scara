@@ -15,6 +15,8 @@ class ScaraGUI:
     """Main GUI class for SCARA robot interface"""
     
     # Conversion factor: 1 cm = 37.8 pixels
+    # This provides a reasonable scale for visualizing robot movements
+    # on a standard display (approximately 96 DPI adjusted for readability)
     CM_TO_PIXELS = 37.8
     
     def __init__(self, root):
@@ -388,7 +390,7 @@ class ScaraGUI:
         
         # Generate filename
         filename = f"coordenadas_scara_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        filepath = os.path.join("/home/runner/work/Robot-scara/Robot-scara", filename)
+        filepath = os.path.join(os.getcwd(), filename)
         
         try:
             with open(filepath, 'w', encoding='utf-8') as f:
