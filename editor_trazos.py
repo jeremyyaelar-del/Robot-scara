@@ -9,7 +9,7 @@ Características:
 - Canvas editable con trazos de mouse
 - Herramientas de edición: grosor, borrador, formas básicas
 - Configuración del lienzo: tamaño ajustable, guías de medición
-- Importar/exportar archivos JSON
+- Importar/exportar archivos DXF (compatible con CNC)
 - Diseño profesional con tonos azulados
 """
 
@@ -17,6 +17,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
 import json
 import math
+import ezdxf
+from ezdxf import units
 
 
 class EditorTrazos:
@@ -25,6 +27,10 @@ class EditorTrazos:
     # Constante de conversión: píxeles por centímetro
     # Basado en 96 DPI estándar: 96 DPI ÷ 2.54 cm/inch = 37.795 px/cm
     PIXELS_PER_CM = 37.795275591
+    
+    # Conversión para DXF (milímetros, estándar CNC)
+    # 1 cm = 10 mm, por lo tanto: px/mm = PIXELS_PER_CM / 10
+    PIXELS_PER_MM = PIXELS_PER_CM / 10.0
     
     def __init__(self, root):
         """
@@ -167,13 +173,13 @@ class EditorTrazos:
         # Botones de archivo
         self._create_section_label(left_frame, "Archivo")
         
-        save_btn = tk.Button(left_frame, text="💾 Guardar JSON", 
-                           command=self._save_json,
+        save_btn = tk.Button(left_frame, text="💾 Guardar DXF", 
+                           command=self._save_dxf,
                            bg=self.button_color, fg="white", activebackground=self.button_active)
         save_btn.pack(pady=5, padx=10, fill=tk.X)
         
-        load_btn = tk.Button(left_frame, text="📂 Cargar JSON", 
-                           command=self._load_json,
+        load_btn = tk.Button(left_frame, text="📂 Cargar DXF", 
+                           command=self._load_dxf,
                            bg=self.button_color, fg="white", activebackground=self.button_active)
         load_btn.pack(pady=5, padx=10, fill=tk.X)
         
@@ -294,7 +300,7 @@ class EditorTrazos:
             self.canvas.delete("guide")
             
     def _draw_guides(self):
-        """Dibuja guías de medición en el canvas."""
+        """Dibuja guías de medición en el canvas con numeración cartesiana."""
         # Eliminar guías existentes
         self.canvas.delete("guide")
         
@@ -313,19 +319,47 @@ class EditorTrazos:
         # Dibujar líneas de cuadrícula cada 1 cm
         cm_px = self.PIXELS_PER_CM
         
-        # Líneas verticales
+        # Ejes principales (X=0 e Y=0) más gruesos
+        # Eje Y (vertical) en x=0
+        self.canvas.create_line(0, 0, 0, height, fill="#808080", 
+                               width=2, tags="guide")
+        # Eje X (horizontal) en y=height (invertido porque Y crece hacia abajo en canvas)
+        self.canvas.create_line(0, height, width, height, fill="#808080", 
+                               width=2, tags="guide")
+        
+        # Etiquetas de los ejes
+        self.canvas.create_text(width - 10, height - 10, text="X", 
+                               fill="#404040", font=("Arial", 10, "bold"), 
+                               tags="guide")
+        self.canvas.create_text(10, 10, text="Y", 
+                               fill="#404040", font=("Arial", 10, "bold"), 
+                               tags="guide")
+        
+        # Líneas verticales con numeración
         x = cm_px
+        cm_count = 1
         while x < width:
             self.canvas.create_line(x, 0, x, height, fill="#D0D0D0", 
                                    dash=(2, 4), tags="guide")
+            # Etiqueta con el valor en cm
+            self.canvas.create_text(x, height - 5, text=str(cm_count), 
+                                   fill="#606060", font=("Arial", 8), 
+                                   anchor=tk.N, tags="guide")
             x += cm_px
+            cm_count += 1
             
-        # Líneas horizontales
-        y = cm_px
-        while y < height:
+        # Líneas horizontales con numeración (invertida porque Y crece hacia abajo)
+        y = height - cm_px
+        cm_count = 1
+        while y > 0:
             self.canvas.create_line(0, y, width, y, fill="#D0D0D0", 
                                    dash=(2, 4), tags="guide")
-            y += cm_px
+            # Etiqueta con el valor en cm
+            self.canvas.create_text(5, y, text=str(cm_count), 
+                                   fill="#606060", font=("Arial", 8), 
+                                   anchor=tk.W, tags="guide")
+            y -= cm_px
+            cm_count += 1
             
         # Asegurar que las guías estén al fondo
         self.canvas.tag_lower("guide")
@@ -336,8 +370,11 @@ class EditorTrazos:
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         
-        if self.current_tool in ["brush", "eraser"]:
+        if self.current_tool == "brush":
             # Iniciar un nuevo trazo
+            self.current_stroke = [(x, y)]
+        elif self.current_tool == "eraser":
+            # Iniciar borrado
             self.current_stroke = [(x, y)]
         elif self.current_tool in ["line", "circle", "rectangle", "triangle"]:
             # Guardar punto inicial para formas
@@ -360,14 +397,24 @@ class EditorTrazos:
                                               smooth=True)
                 self.current_stroke.append((x, y))
         elif self.current_tool == "eraser":
-            # Borrar dibujando en blanco
+            # Borrar elementos encontrados (excepto guías)
             if self.current_stroke:
                 last_x, last_y = self.current_stroke[-1]
-                self.canvas.create_line(last_x, last_y, x, y,
-                                       fill="white",
-                                       width=self.brush_size,
-                                       capstyle=tk.ROUND,
-                                       smooth=True)
+                # Buscar elementos en el área del borrador
+                # Usar un radio basado en el tamaño del brush
+                radius = self.brush_size / 2
+                items = self.canvas.find_overlapping(
+                    x - radius, y - radius,
+                    x + radius, y + radius
+                )
+                # Eliminar solo elementos que NO sean guías
+                for item in items:
+                    tags = self.canvas.gettags(item)
+                    if "guide" not in tags:
+                        self.canvas.delete(item)
+                        # También eliminar del almacenamiento si es necesario
+                        # (esto se manejará mejor en el futuro)
+                
                 self.current_stroke.append((x, y))
         elif self.current_tool in ["line", "circle", "rectangle", "triangle"]:
             # Dibujar forma temporal
@@ -385,18 +432,21 @@ class EditorTrazos:
         x = self.canvas.canvasx(event.x)
         y = self.canvas.canvasy(event.y)
         
-        if self.current_tool in ["brush", "eraser"]:
+        if self.current_tool == "brush":
             # Guardar el trazo completo
             if self.current_stroke:
                 self.current_stroke.append((x, y))
                 stroke_data = {
                     "type": self.current_tool,
                     "points": self.current_stroke,
-                    "color": self.brush_color if self.current_tool == "brush" else "white",
+                    "color": self.brush_color,
                     "width": self.brush_size
                 }
                 self.strokes.append(stroke_data)
                 self.current_stroke = []
+        elif self.current_tool == "eraser":
+            # No guardar trazos de borrador
+            self.current_stroke = []
         elif self.current_tool in ["line", "circle", "rectangle", "triangle"]:
             # Finalizar forma
             if self.shape_start:
@@ -571,6 +621,230 @@ class EditorTrazos:
                 messagebox.showerror("Error", f"Error al decodificar JSON: {str(e)}")
             except (ValueError, KeyError, TypeError) as e:
                 messagebox.showerror("Error", f"Formato de archivo inválido: {str(e)}")
+                
+    def _save_dxf(self):
+        """Guarda los trazos y formas en un archivo DXF compatible con CNC."""
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".dxf",
+            filetypes=[("DXF files", "*.dxf"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                # Crear nuevo documento DXF (R2010 es compatible con la mayoría de CNCs)
+                doc = ezdxf.new('R2010', setup=True)
+                msp = doc.modelspace()
+                
+                # Configurar unidades en milímetros (estándar para CNC)
+                doc.units = units.MM
+                
+                # Crear capas para organización
+                doc.layers.add('STROKES', color=7)  # Blanco
+                doc.layers.add('SHAPES', color=1)   # Rojo
+                
+                # Convertir trazos a polylines DXF
+                for stroke in self.strokes:
+                    if stroke['type'] == 'brush':
+                        # Convertir puntos de píxeles a milímetros
+                        points_mm = [(x / self.PIXELS_PER_MM, -y / self.PIXELS_PER_MM) 
+                                    for x, y in stroke['points']]
+                        
+                        if len(points_mm) > 1:
+                            # Crear LWPOLYLINE para trazos
+                            msp.add_lwpolyline(points_mm, dxfattribs={
+                                'layer': 'STROKES',
+                                'color': self._color_to_aci(stroke['color'])
+                            })
+                
+                # Convertir formas a entidades DXF
+                for shape in self.shapes:
+                    start_x, start_y = shape['start']
+                    end_x, end_y = shape['end']
+                    
+                    # Convertir a milímetros (invertir Y)
+                    start_mm = (start_x / self.PIXELS_PER_MM, -start_y / self.PIXELS_PER_MM)
+                    end_mm = (end_x / self.PIXELS_PER_MM, -end_y / self.PIXELS_PER_MM)
+                    
+                    color_aci = self._color_to_aci(shape['color'])
+                    
+                    if shape['type'] == 'line':
+                        msp.add_line(start_mm, end_mm, dxfattribs={
+                            'layer': 'SHAPES',
+                            'color': color_aci
+                        })
+                    
+                    elif shape['type'] == 'circle':
+                        # Calcular radio
+                        radius = math.sqrt((end_x - start_x)**2 + (end_y - start_y)**2) / self.PIXELS_PER_MM
+                        msp.add_circle(start_mm, radius, dxfattribs={
+                            'layer': 'SHAPES',
+                            'color': color_aci
+                        })
+                    
+                    elif shape['type'] == 'rectangle':
+                        # Crear rectángulo como polyline cerrada
+                        top_left = start_mm
+                        bottom_right = end_mm
+                        points = [
+                            top_left,
+                            (bottom_right[0], top_left[1]),
+                            bottom_right,
+                            (top_left[0], bottom_right[1]),
+                            top_left  # Cerrar
+                        ]
+                        msp.add_lwpolyline(points, close=True, dxfattribs={
+                            'layer': 'SHAPES',
+                            'color': color_aci
+                        })
+                    
+                    elif shape['type'] == 'triangle':
+                        # Calcular puntos del triángulo
+                        mid_x = (start_x + end_x) / 2
+                        points_mm = [
+                            (mid_x / self.PIXELS_PER_MM, -start_y / self.PIXELS_PER_MM),
+                            (start_x / self.PIXELS_PER_MM, -end_y / self.PIXELS_PER_MM),
+                            (end_x / self.PIXELS_PER_MM, -end_y / self.PIXELS_PER_MM),
+                            (mid_x / self.PIXELS_PER_MM, -start_y / self.PIXELS_PER_MM)  # Cerrar
+                        ]
+                        msp.add_lwpolyline(points_mm, close=True, dxfattribs={
+                            'layer': 'SHAPES',
+                            'color': color_aci
+                        })
+                
+                # Guardar archivo DXF
+                doc.saveas(filename)
+                messagebox.showinfo("Éxito", "Archivo DXF guardado correctamente para CNC.")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Error al guardar archivo DXF: {str(e)}")
+    
+    def _load_dxf(self):
+        """Carga trazos y formas desde un archivo DXF."""
+        filename = filedialog.askopenfilename(
+            filetypes=[("DXF files", "*.dxf"), ("All files", "*.*")]
+        )
+        
+        if filename:
+            try:
+                # Leer archivo DXF
+                doc = ezdxf.readfile(filename)
+                msp = doc.modelspace()
+                
+                # Limpiar canvas actual
+                self._clear_canvas()
+                
+                # Cargar entidades DXF
+                for entity in msp:
+                    if entity.dxftype() == 'LWPOLYLINE':
+                        # Convertir LWPOLYLINE a trazo
+                        points_px = []
+                        for point in entity.get_points('xy'):
+                            # Convertir de mm a píxeles (invertir Y)
+                            x_px = point[0] * self.PIXELS_PER_MM
+                            y_px = -point[1] * self.PIXELS_PER_MM
+                            points_px.append((x_px, y_px))
+                        
+                        if len(points_px) > 1:
+                            # Obtener color
+                            color = self._aci_to_color(entity.dxf.color)
+                            
+                            # Crear trazo
+                            stroke_data = {
+                                'type': 'brush',
+                                'points': points_px,
+                                'color': color,
+                                'width': 2  # Ancho por defecto
+                            }
+                            self.strokes.append(stroke_data)
+                            
+                            # Dibujar en canvas
+                            for i in range(len(points_px) - 1):
+                                x1, y1 = points_px[i]
+                                x2, y2 = points_px[i + 1]
+                                self.canvas.create_line(x1, y1, x2, y2,
+                                                      fill=color,
+                                                      width=2,
+                                                      capstyle=tk.ROUND,
+                                                      smooth=True)
+                    
+                    elif entity.dxftype() == 'LINE':
+                        # Convertir LINE a forma de línea
+                        start = entity.dxf.start
+                        end = entity.dxf.end
+                        
+                        # Convertir de mm a píxeles
+                        start_px = (start[0] * self.PIXELS_PER_MM, -start[1] * self.PIXELS_PER_MM)
+                        end_px = (end[0] * self.PIXELS_PER_MM, -end[1] * self.PIXELS_PER_MM)
+                        
+                        color = self._aci_to_color(entity.dxf.color)
+                        
+                        shape_data = {
+                            'type': 'line',
+                            'start': start_px,
+                            'end': end_px,
+                            'color': color,
+                            'width': 2
+                        }
+                        self.shapes.append(shape_data)
+                        self._draw_shape(shape_data)
+                    
+                    elif entity.dxftype() == 'CIRCLE':
+                        # Convertir CIRCLE a forma de círculo
+                        center = entity.dxf.center
+                        radius = entity.dxf.radius
+                        
+                        # Convertir de mm a píxeles
+                        center_px = (center[0] * self.PIXELS_PER_MM, -center[1] * self.PIXELS_PER_MM)
+                        radius_px = radius * self.PIXELS_PER_MM
+                        
+                        # Calcular punto final (a la derecha del centro)
+                        end_px = (center_px[0] + radius_px, center_px[1])
+                        
+                        color = self._aci_to_color(entity.dxf.color)
+                        
+                        shape_data = {
+                            'type': 'circle',
+                            'start': center_px,
+                            'end': end_px,
+                            'color': color,
+                            'width': 2
+                        }
+                        self.shapes.append(shape_data)
+                        self._draw_shape(shape_data)
+                
+                messagebox.showinfo("Éxito", f"Archivo DXF cargado correctamente.")
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Error al cargar archivo DXF: {str(e)}")
+    
+    def _color_to_aci(self, hex_color):
+        """Convierte color hexadecimal a AutoCAD Color Index (ACI)."""
+        # Mapeo básico de colores comunes
+        color_map = {
+            '#000000': 7,   # Blanco (en AutoCAD, negro se muestra como blanco)
+            '#FF0000': 1,   # Rojo
+            '#FFFF00': 2,   # Amarillo
+            '#00FF00': 3,   # Verde
+            '#00FFFF': 4,   # Cyan
+            '#0000FF': 5,   # Azul
+            '#FF00FF': 6,   # Magenta
+            '#FFFFFF': 7,   # Blanco
+        }
+        return color_map.get(hex_color.upper(), 7)  # Por defecto blanco
+    
+    def _aci_to_color(self, aci):
+        """Convierte AutoCAD Color Index (ACI) a color hexadecimal."""
+        # Mapeo inverso
+        aci_map = {
+            1: '#FF0000',  # Rojo
+            2: '#FFFF00',  # Amarillo
+            3: '#00FF00',  # Verde
+            4: '#00FFFF',  # Cyan
+            5: '#0000FF',  # Azul
+            6: '#FF00FF',  # Magenta
+            7: '#000000',  # Negro (blanco en AutoCAD)
+        }
+        return aci_map.get(aci, '#000000')  # Por defecto negro
                 
     def _clear_canvas(self):
         """Limpia todos los trazos del canvas."""
