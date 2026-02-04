@@ -730,18 +730,104 @@ class EditorTrazos:
                 doc = ezdxf.readfile(filename)
                 msp = doc.modelspace()
                 
+                # 1. Calcular bounding box del archivo DXF
+                min_x = min_y = float('inf')
+                max_x = max_y = float('-inf')
+                
+                for entity in msp:
+                    if entity.dxftype() == 'LWPOLYLINE':
+                        for point in entity.get_points('xy'):
+                            x, y = point[0], point[1]
+                            min_x = min(min_x, x)
+                            max_x = max(max_x, x)
+                            min_y = min(min_y, y)
+                            max_y = max(max_y, y)
+                    
+                    elif entity.dxftype() == 'LINE':
+                        start = entity.dxf.start
+                        end = entity.dxf.end
+                        min_x = min(min_x, start[0], end[0])
+                        max_x = max(max_x, start[0], end[0])
+                        min_y = min(min_y, start[1], end[1])
+                        max_y = max(max_y, start[1], end[1])
+                    
+                    elif entity.dxftype() == 'CIRCLE':
+                        center = entity.dxf.center
+                        radius = entity.dxf.radius
+                        min_x = min(min_x, center[0] - radius)
+                        max_x = max(max_x, center[0] + radius)
+                        min_y = min(min_y, center[1] - radius)
+                        max_y = max(max_y, center[1] + radius)
+                    
+                    elif entity.dxftype() == 'ARC':
+                        center = entity.dxf.center
+                        radius = entity.dxf.radius
+                        # Para simplificar, usar el círculo completo como bounding box
+                        min_x = min(min_x, center[0] - radius)
+                        max_x = max(max_x, center[0] + radius)
+                        min_y = min(min_y, center[1] - radius)
+                        max_y = max(max_y, center[1] + radius)
+                    
+                    elif entity.dxftype() == 'SPLINE':
+                        # Para SPLINE, obtener puntos de control
+                        try:
+                            control_points = entity.control_points
+                            for point in control_points:
+                                min_x = min(min_x, point[0])
+                                max_x = max(max_x, point[0])
+                                min_y = min(min_y, point[1])
+                                max_y = max(max_y, point[1])
+                        except:
+                            # Si no hay puntos de control, intentar con fit points
+                            try:
+                                fit_points = entity.fit_points
+                                for point in fit_points:
+                                    min_x = min(min_x, point[0])
+                                    max_x = max(max_x, point[0])
+                                    min_y = min(min_y, point[1])
+                                    max_y = max(max_y, point[1])
+                            except:
+                                pass
+                
+                # Verificar si hay entidades válidas
+                if min_x == float('inf'):
+                    messagebox.showwarning("Advertencia", "El archivo DXF está vacío o no contiene entidades válidas.")
+                    return
+                
+                # 2. Ajustar tamaño del lienzo automáticamente con margen
+                MARGIN_PERCENT = 0.1
+                width_mm = max_x - min_x
+                height_mm = max_y - min_y
+                margin_x = width_mm * MARGIN_PERCENT
+                margin_y = height_mm * MARGIN_PERCENT
+                
+                # Convertir de mm a cm
+                new_width_cm = (width_mm + 2 * margin_x) / 10
+                new_height_cm = (height_mm + 2 * margin_y) / 10
+                
+                # Actualizar Entry widgets
+                self.canvas_width_var.set(str(int(new_width_cm)))
+                self.canvas_height_var.set(str(int(new_height_cm)))
+                
+                # Aplicar nuevo tamaño
+                self._update_canvas_size()
+                
+                # 3. Calcular offset para centrar el dibujo
+                offset_x = -min_x + margin_x
+                offset_y = -min_y + margin_y
+                
                 # Limpiar canvas actual
                 self._clear_canvas()
                 
-                # Cargar entidades DXF
+                # 4. Cargar entidades DXF con offset aplicado
                 for entity in msp:
                     if entity.dxftype() == 'LWPOLYLINE':
                         # Convertir LWPOLYLINE a trazo
                         points_px = []
                         for point in entity.get_points('xy'):
-                            # Convertir de mm a píxeles (invertir Y)
-                            x_px = point[0] * self.PIXELS_PER_MM
-                            y_px = -point[1] * self.PIXELS_PER_MM
+                            # Aplicar offset y convertir de mm a píxeles (invertir Y)
+                            x_px = (point[0] + offset_x) * self.PIXELS_PER_MM
+                            y_px = -(point[1] + offset_y) * self.PIXELS_PER_MM
                             points_px.append((x_px, y_px))
                         
                         if len(points_px) > 1:
@@ -772,9 +858,9 @@ class EditorTrazos:
                         start = entity.dxf.start
                         end = entity.dxf.end
                         
-                        # Convertir de mm a píxeles
-                        start_px = (start[0] * self.PIXELS_PER_MM, -start[1] * self.PIXELS_PER_MM)
-                        end_px = (end[0] * self.PIXELS_PER_MM, -end[1] * self.PIXELS_PER_MM)
+                        # Aplicar offset y convertir de mm a píxeles
+                        start_px = ((start[0] + offset_x) * self.PIXELS_PER_MM, -(start[1] + offset_y) * self.PIXELS_PER_MM)
+                        end_px = ((end[0] + offset_x) * self.PIXELS_PER_MM, -(end[1] + offset_y) * self.PIXELS_PER_MM)
                         
                         color = self._aci_to_color(entity.dxf.color)
                         
@@ -793,8 +879,8 @@ class EditorTrazos:
                         center = entity.dxf.center
                         radius = entity.dxf.radius
                         
-                        # Convertir de mm a píxeles
-                        center_px = (center[0] * self.PIXELS_PER_MM, -center[1] * self.PIXELS_PER_MM)
+                        # Aplicar offset y convertir de mm a píxeles
+                        center_px = ((center[0] + offset_x) * self.PIXELS_PER_MM, -(center[1] + offset_y) * self.PIXELS_PER_MM)
                         radius_px = radius * self.PIXELS_PER_MM
                         
                         # Calcular punto final (a la derecha del centro)
