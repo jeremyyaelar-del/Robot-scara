@@ -32,6 +32,10 @@ class EditorTrazos:
     # 1 cm = 10 mm, por lo tanto: px/mm = PIXELS_PER_CM / 10
     PIXELS_PER_MM = PIXELS_PER_CM / 10.0
     
+    # Configuración para conversión de entidades DXF complejas
+    FLATTENING_DISTANCE = 0.5  # mm - Precisión para convertir SPLINE/ELLIPSE a líneas
+    ARC_SEGMENTS = 20  # Número de segmentos para convertir ARCs a polilíneas
+    
     def __init__(self, root):
         """
         Inicializa la aplicación del editor de trazos.
@@ -918,8 +922,8 @@ class EditorTrazos:
     def _load_spline(self, entity):
         """Carga una entidad SPLINE convirtiéndola a polilínea."""
         try:
-            # Aplanar spline a líneas con precisión de 0.5mm
-            points = list(entity.flattening(distance=0.5))
+            # Aplanar spline a líneas con precisión configurable
+            points = list(entity.flattening(distance=self.FLATTENING_DISTANCE))
             
             # Convertir a coordenadas de canvas
             points_px = []
@@ -951,8 +955,9 @@ class EditorTrazos:
                                           capstyle=tk.ROUND,
                                           smooth=True)
         except Exception as e:
-            # Si hay error al procesar spline, ignorar silenciosamente
-            print(f"Error procesando SPLINE: {e}")
+            # Si hay error al procesar spline, registrar y continuar
+            import sys
+            print(f"Advertencia: Error procesando SPLINE: {e}", file=sys.stderr)
     
     def _load_arc(self, entity):
         """Carga una entidad ARC convirtiéndola a polilínea."""
@@ -966,11 +971,10 @@ class EditorTrazos:
             if end_angle < start_angle:
                 end_angle += 2 * math.pi
             
-            # Generar puntos del arco (20 segmentos por defecto)
-            num_segments = 20
+            # Generar puntos del arco usando constante configurable
             points_px = []
-            for i in range(num_segments + 1):
-                angle = start_angle + (end_angle - start_angle) * i / num_segments
+            for i in range(self.ARC_SEGMENTS + 1):
+                angle = start_angle + (end_angle - start_angle) * i / self.ARC_SEGMENTS
                 x = center.x + radius * math.cos(angle)
                 y = center.y + radius * math.sin(angle)
                 x_px = x * self.PIXELS_PER_MM
@@ -1000,13 +1004,14 @@ class EditorTrazos:
                                           capstyle=tk.ROUND,
                                           smooth=True)
         except Exception as e:
-            print(f"Error procesando ARC: {e}")
+            import sys
+            print(f"Advertencia: Error procesando ARC: {e}", file=sys.stderr)
     
     def _load_ellipse(self, entity):
         """Carga una entidad ELLIPSE convirtiéndola a polilínea."""
         try:
-            # Aplanar elipse a líneas con precisión de 0.5mm
-            points = list(entity.flattening(distance=0.5))
+            # Aplanar elipse a líneas con precisión configurable
+            points = list(entity.flattening(distance=self.FLATTENING_DISTANCE))
             
             # Convertir a coordenadas de canvas
             points_px = []
@@ -1038,7 +1043,8 @@ class EditorTrazos:
                                           capstyle=tk.ROUND,
                                           smooth=True)
         except Exception as e:
-            print(f"Error procesando ELLIPSE: {e}")
+            import sys
+            print(f"Advertencia: Error procesando ELLIPSE: {e}", file=sys.stderr)
     
     def _color_to_aci(self, hex_color):
         """Convierte color hexadecimal a AutoCAD Color Index (ACI)."""
