@@ -2,7 +2,23 @@
 
 ## Cambios Principales
 
-### 1. Formato DXF en lugar de JSON
+### 1. Soporte para Entidades DXF Complejas (NUEVO)
+- ✅ **SPLINE**: Curvas Bézier/NURBS convertidas a trazos suavizados
+- ✅ **ARC**: Arcos convertidos a polilíneas con 20 segmentos
+- ✅ **ELLIPSE**: Elipses convertidas a trazos suavizados
+- ✅ **POLYLINE**: Soporte completo para polilíneas 3D
+- ✅ Manejo robusto de errores con ezdxf.recover
+- ✅ Estadísticas detalladas al cargar archivos
+
+**Archivos compatibles:**
+```
+✓ Diseños arquitectónicos con curvas complejas
+✓ Arte vectorial con splines (caligrafía, logos)
+✓ Archivos de AutoCAD, LibreCAD, FreeCAD, Inkscape
+✓ Archivos DXF corruptos (con recuperación automática)
+```
+
+### 2. Formato DXF en lugar de JSON
 - ✅ Los archivos ahora se guardan en formato DXF (estándar CNC)
 - ✅ Compatible con AutoCAD, LibreCAD, FreeCAD, etc.
 - ✅ Unidades en milímetros (estándar para CNC)
@@ -20,7 +36,7 @@
 📂 Cargar DXF    →  Cualquier archivo DXF externo
 ```
 
-### 2. Guías de Medición Mejoradas
+### 3. Guías de Medición Mejoradas
 Las guías ahora tienen:
 - ✅ Sistema de coordenadas cartesiano
 - ✅ Numeración en centímetros (1, 2, 3...)
@@ -41,7 +57,7 @@ Y
   0    1    2    3    4
 ```
 
-### 3. Borrador Mejorado
+### 4. Borrador Mejorado
 - ✅ Ahora borra elementos cercanos (no dibuja blanco)
 - ✅ Las guías de medición están protegidas
 - ✅ Solo afecta trazos y formas dibujadas
@@ -51,7 +67,7 @@ Y
 - Antes: Dibujaba líneas blancas sobre el dibujo
 - Ahora: Elimina elementos bajo el cursor, excepto guías
 
-### 4. Compatibilidad CNC
+### 5. Compatibilidad CNC
 
 #### Exportación DXF:
 - Capas organizadas: STROKES y SHAPES
@@ -61,8 +77,11 @@ Y
 
 #### Importación DXF:
 - Lee archivos de cualquier software CAD
-- Convierte LWPOLYLINE a trazos
+- Convierte LWPOLYLINE, POLYLINE a trazos
 - Convierte LINE, CIRCLE a formas
+- Convierte SPLINE, ARC, ELLIPSE a trazos suavizados
+- Manejo robusto de errores con recuperación automática
+- Muestra estadísticas de entidades cargadas
 - Permite modificación con herramientas existentes
 
 ## Flujo de Trabajo para CNC
