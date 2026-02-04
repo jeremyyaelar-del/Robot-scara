@@ -116,8 +116,12 @@ Los archivos DXF generados incluyen:
   - `SHAPES`: Formas geométricas (LINE, CIRCLE, etc.)
 - **Entidades soportadas**:
   - LWPOLYLINE (trazos y polígonos)
+  - POLYLINE (polilíneas con vértices 3D)
   - LINE (líneas rectas)
   - CIRCLE (círculos)
+  - SPLINE (curvas Bézier/NURBS) - convertidas a polilíneas
+  - ARC (arcos) - convertidos a polilíneas
+  - ELLIPSE (elipses) - convertidas a polilíneas
   - Colores ACI (AutoCAD Color Index)
 
 ### Compatibilidad
