@@ -18,7 +18,7 @@ from tkinter import ttk, filedialog, messagebox, colorchooser
 import json
 import math
 import ezdxf
-from ezdxf import units
+from ezdxf import units, recover
 
 
 class EditorTrazos:
@@ -719,103 +719,326 @@ class EditorTrazos:
                 messagebox.showerror("Error", f"Error al guardar archivo DXF: {str(e)}")
     
     def _load_dxf(self):
-        """Carga trazos y formas desde un archivo DXF."""
+        """Carga trazos y formas desde un archivo DXF con soporte para entidades complejas."""
         filename = filedialog.askopenfilename(
             filetypes=[("DXF files", "*.dxf"), ("All files", "*.*")]
         )
         
         if filename:
             try:
-                # Leer archivo DXF
-                doc = ezdxf.readfile(filename)
+                # Intentar leer archivo DXF
+                try:
+                    doc = ezdxf.readfile(filename)
+                except ezdxf.DXFStructureError:
+                    # Intentar recuperación si el archivo está corrupto
+                    doc, auditor = recover.readfile(filename)
+                    if auditor.has_errors:
+                        messagebox.showwarning("Advertencia", 
+                            "El archivo DXF tenía errores pero se intentó recuperar.")
+                
                 msp = doc.modelspace()
                 
                 # Limpiar canvas actual
                 self._clear_canvas()
                 
+                # Estadísticas de carga
+                stats = {
+                    'LWPOLYLINE': 0,
+                    'POLYLINE': 0,
+                    'LINE': 0,
+                    'CIRCLE': 0,
+                    'SPLINE': 0,
+                    'ARC': 0,
+                    'ELLIPSE': 0,
+                    'OTHER': 0
+                }
+                
                 # Cargar entidades DXF
                 for entity in msp:
-                    if entity.dxftype() == 'LWPOLYLINE':
-                        # Convertir LWPOLYLINE a trazo
-                        points_px = []
-                        for point in entity.get_points('xy'):
-                            # Convertir de mm a píxeles (invertir Y)
-                            x_px = point[0] * self.PIXELS_PER_MM
-                            y_px = -point[1] * self.PIXELS_PER_MM
-                            points_px.append((x_px, y_px))
-                        
-                        if len(points_px) > 1:
-                            # Obtener color
-                            color = self._aci_to_color(entity.dxf.color)
-                            
-                            # Crear trazo
-                            stroke_data = {
-                                'type': 'brush',
-                                'points': points_px,
-                                'color': color,
-                                'width': 2  # Ancho por defecto
-                            }
-                            self.strokes.append(stroke_data)
-                            
-                            # Dibujar en canvas
-                            for i in range(len(points_px) - 1):
-                                x1, y1 = points_px[i]
-                                x2, y2 = points_px[i + 1]
-                                self.canvas.create_line(x1, y1, x2, y2,
-                                                      fill=color,
-                                                      width=2,
-                                                      capstyle=tk.ROUND,
-                                                      smooth=True)
+                    entity_type = entity.dxftype()
                     
-                    elif entity.dxftype() == 'LINE':
-                        # Convertir LINE a forma de línea
-                        start = entity.dxf.start
-                        end = entity.dxf.end
-                        
-                        # Convertir de mm a píxeles
-                        start_px = (start[0] * self.PIXELS_PER_MM, -start[1] * self.PIXELS_PER_MM)
-                        end_px = (end[0] * self.PIXELS_PER_MM, -end[1] * self.PIXELS_PER_MM)
-                        
-                        color = self._aci_to_color(entity.dxf.color)
-                        
-                        shape_data = {
-                            'type': 'line',
-                            'start': start_px,
-                            'end': end_px,
-                            'color': color,
-                            'width': 2
-                        }
-                        self.shapes.append(shape_data)
-                        self._draw_shape(shape_data)
+                    if entity_type == 'LWPOLYLINE':
+                        self._load_lwpolyline(entity)
+                        stats['LWPOLYLINE'] += 1
                     
-                    elif entity.dxftype() == 'CIRCLE':
-                        # Convertir CIRCLE a forma de círculo
-                        center = entity.dxf.center
-                        radius = entity.dxf.radius
-                        
-                        # Convertir de mm a píxeles
-                        center_px = (center[0] * self.PIXELS_PER_MM, -center[1] * self.PIXELS_PER_MM)
-                        radius_px = radius * self.PIXELS_PER_MM
-                        
-                        # Calcular punto final (a la derecha del centro)
-                        end_px = (center_px[0] + radius_px, center_px[1])
-                        
-                        color = self._aci_to_color(entity.dxf.color)
-                        
-                        shape_data = {
-                            'type': 'circle',
-                            'start': center_px,
-                            'end': end_px,
-                            'color': color,
-                            'width': 2
-                        }
-                        self.shapes.append(shape_data)
-                        self._draw_shape(shape_data)
+                    elif entity_type == 'POLYLINE':
+                        self._load_polyline(entity)
+                        stats['POLYLINE'] += 1
+                    
+                    elif entity_type == 'LINE':
+                        self._load_line(entity)
+                        stats['LINE'] += 1
+                    
+                    elif entity_type == 'CIRCLE':
+                        self._load_circle(entity)
+                        stats['CIRCLE'] += 1
+                    
+                    elif entity_type == 'SPLINE':
+                        self._load_spline(entity)
+                        stats['SPLINE'] += 1
+                    
+                    elif entity_type == 'ARC':
+                        self._load_arc(entity)
+                        stats['ARC'] += 1
+                    
+                    elif entity_type == 'ELLIPSE':
+                        self._load_ellipse(entity)
+                        stats['ELLIPSE'] += 1
+                    
+                    else:
+                        stats['OTHER'] += 1
                 
-                messagebox.showinfo("Éxito", f"Archivo DXF cargado correctamente.")
+                # Mostrar estadísticas de carga
+                loaded_entities = []
+                for entity_type, count in stats.items():
+                    if count > 0 and entity_type != 'OTHER':
+                        loaded_entities.append(f"{count} {entity_type}")
+                
+                stats_msg = "Archivo DXF cargado correctamente.\n\n"
+                if loaded_entities:
+                    stats_msg += "Entidades cargadas:\n" + "\n".join(loaded_entities)
+                if stats['OTHER'] > 0:
+                    stats_msg += f"\n\n{stats['OTHER']} entidades no soportadas fueron ignoradas."
+                
+                messagebox.showinfo("Éxito", stats_msg)
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Error al cargar archivo DXF: {str(e)}")
+    
+    def _load_lwpolyline(self, entity):
+        """Carga una entidad LWPOLYLINE."""
+        points_px = []
+        for point in entity.get_points('xy'):
+            # Convertir de mm a píxeles (invertir Y)
+            x_px = point[0] * self.PIXELS_PER_MM
+            y_px = -point[1] * self.PIXELS_PER_MM
+            points_px.append((x_px, y_px))
+        
+        if len(points_px) > 1:
+            # Obtener color
+            color = self._aci_to_color(entity.dxf.color)
+            
+            # Crear trazo
+            stroke_data = {
+                'type': 'brush',
+                'points': points_px,
+                'color': color,
+                'width': 2
+            }
+            self.strokes.append(stroke_data)
+            
+            # Dibujar en canvas
+            for i in range(len(points_px) - 1):
+                x1, y1 = points_px[i]
+                x2, y2 = points_px[i + 1]
+                self.canvas.create_line(x1, y1, x2, y2,
+                                      fill=color,
+                                      width=2,
+                                      capstyle=tk.ROUND,
+                                      smooth=True)
+    
+    def _load_polyline(self, entity):
+        """Carga una entidad POLYLINE (diferente de LWPOLYLINE)."""
+        points_px = []
+        for vertex in entity.vertices:
+            point = vertex.dxf.location
+            # Convertir de mm a píxeles (invertir Y)
+            x_px = point[0] * self.PIXELS_PER_MM
+            y_px = -point[1] * self.PIXELS_PER_MM
+            points_px.append((x_px, y_px))
+        
+        if len(points_px) > 1:
+            # Obtener color
+            color = self._aci_to_color(entity.dxf.color)
+            
+            # Crear trazo
+            stroke_data = {
+                'type': 'brush',
+                'points': points_px,
+                'color': color,
+                'width': 2
+            }
+            self.strokes.append(stroke_data)
+            
+            # Dibujar en canvas
+            for i in range(len(points_px) - 1):
+                x1, y1 = points_px[i]
+                x2, y2 = points_px[i + 1]
+                self.canvas.create_line(x1, y1, x2, y2,
+                                      fill=color,
+                                      width=2,
+                                      capstyle=tk.ROUND,
+                                      smooth=True)
+    
+    def _load_line(self, entity):
+        """Carga una entidad LINE."""
+        start = entity.dxf.start
+        end = entity.dxf.end
+        
+        # Convertir de mm a píxeles
+        start_px = (start[0] * self.PIXELS_PER_MM, -start[1] * self.PIXELS_PER_MM)
+        end_px = (end[0] * self.PIXELS_PER_MM, -end[1] * self.PIXELS_PER_MM)
+        
+        color = self._aci_to_color(entity.dxf.color)
+        
+        shape_data = {
+            'type': 'line',
+            'start': start_px,
+            'end': end_px,
+            'color': color,
+            'width': 2
+        }
+        self.shapes.append(shape_data)
+        self._draw_shape(shape_data)
+    
+    def _load_circle(self, entity):
+        """Carga una entidad CIRCLE."""
+        center = entity.dxf.center
+        radius = entity.dxf.radius
+        
+        # Convertir de mm a píxeles
+        center_px = (center[0] * self.PIXELS_PER_MM, -center[1] * self.PIXELS_PER_MM)
+        radius_px = radius * self.PIXELS_PER_MM
+        
+        # Calcular punto final (a la derecha del centro)
+        end_px = (center_px[0] + radius_px, center_px[1])
+        
+        color = self._aci_to_color(entity.dxf.color)
+        
+        shape_data = {
+            'type': 'circle',
+            'start': center_px,
+            'end': end_px,
+            'color': color,
+            'width': 2
+        }
+        self.shapes.append(shape_data)
+        self._draw_shape(shape_data)
+    
+    def _load_spline(self, entity):
+        """Carga una entidad SPLINE convirtiéndola a polilínea."""
+        try:
+            # Aplanar spline a líneas con precisión de 0.5mm
+            points = list(entity.flattening(distance=0.5))
+            
+            # Convertir a coordenadas de canvas
+            points_px = []
+            for point in points:
+                x_px = point.x * self.PIXELS_PER_MM
+                y_px = -point.y * self.PIXELS_PER_MM
+                points_px.append((x_px, y_px))
+            
+            if len(points_px) > 1:
+                # Obtener color
+                color = self._aci_to_color(entity.dxf.color)
+                
+                # Crear trazo
+                stroke_data = {
+                    'type': 'brush',
+                    'points': points_px,
+                    'color': color,
+                    'width': 2
+                }
+                self.strokes.append(stroke_data)
+                
+                # Dibujar en canvas
+                for i in range(len(points_px) - 1):
+                    x1, y1 = points_px[i]
+                    x2, y2 = points_px[i + 1]
+                    self.canvas.create_line(x1, y1, x2, y2,
+                                          fill=color,
+                                          width=2,
+                                          capstyle=tk.ROUND,
+                                          smooth=True)
+        except Exception as e:
+            # Si hay error al procesar spline, ignorar silenciosamente
+            print(f"Error procesando SPLINE: {e}")
+    
+    def _load_arc(self, entity):
+        """Carga una entidad ARC convirtiéndola a polilínea."""
+        try:
+            center = entity.dxf.center
+            radius = entity.dxf.radius
+            start_angle = math.radians(entity.dxf.start_angle)
+            end_angle = math.radians(entity.dxf.end_angle)
+            
+            # Ajustar ángulos si end_angle < start_angle
+            if end_angle < start_angle:
+                end_angle += 2 * math.pi
+            
+            # Generar puntos del arco (20 segmentos por defecto)
+            num_segments = 20
+            points_px = []
+            for i in range(num_segments + 1):
+                angle = start_angle + (end_angle - start_angle) * i / num_segments
+                x = center.x + radius * math.cos(angle)
+                y = center.y + radius * math.sin(angle)
+                x_px = x * self.PIXELS_PER_MM
+                y_px = -y * self.PIXELS_PER_MM
+                points_px.append((x_px, y_px))
+            
+            if len(points_px) > 1:
+                # Obtener color
+                color = self._aci_to_color(entity.dxf.color)
+                
+                # Crear trazo
+                stroke_data = {
+                    'type': 'brush',
+                    'points': points_px,
+                    'color': color,
+                    'width': 2
+                }
+                self.strokes.append(stroke_data)
+                
+                # Dibujar en canvas
+                for i in range(len(points_px) - 1):
+                    x1, y1 = points_px[i]
+                    x2, y2 = points_px[i + 1]
+                    self.canvas.create_line(x1, y1, x2, y2,
+                                          fill=color,
+                                          width=2,
+                                          capstyle=tk.ROUND,
+                                          smooth=True)
+        except Exception as e:
+            print(f"Error procesando ARC: {e}")
+    
+    def _load_ellipse(self, entity):
+        """Carga una entidad ELLIPSE convirtiéndola a polilínea."""
+        try:
+            # Aplanar elipse a líneas con precisión de 0.5mm
+            points = list(entity.flattening(distance=0.5))
+            
+            # Convertir a coordenadas de canvas
+            points_px = []
+            for point in points:
+                x_px = point.x * self.PIXELS_PER_MM
+                y_px = -point.y * self.PIXELS_PER_MM
+                points_px.append((x_px, y_px))
+            
+            if len(points_px) > 1:
+                # Obtener color
+                color = self._aci_to_color(entity.dxf.color)
+                
+                # Crear trazo
+                stroke_data = {
+                    'type': 'brush',
+                    'points': points_px,
+                    'color': color,
+                    'width': 2
+                }
+                self.strokes.append(stroke_data)
+                
+                # Dibujar en canvas
+                for i in range(len(points_px) - 1):
+                    x1, y1 = points_px[i]
+                    x2, y2 = points_px[i + 1]
+                    self.canvas.create_line(x1, y1, x2, y2,
+                                          fill=color,
+                                          width=2,
+                                          capstyle=tk.ROUND,
+                                          smooth=True)
+        except Exception as e:
+            print(f"Error procesando ELLIPSE: {e}")
     
     def _color_to_aci(self, hex_color):
         """Convierte color hexadecimal a AutoCAD Color Index (ACI)."""
