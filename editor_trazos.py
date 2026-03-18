@@ -11,14 +11,24 @@ Características:
 - Configuración del lienzo: tamaño ajustable, guías de medición
 - Importar/exportar archivos DXF (compatible con CNC)
 - Diseño profesional con tonos azulados
+- Ventana "Programar" para envío de trayectorias DXF a Arduino SCARA
 """
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
 import json
 import math
+import threading
+import time
 import ezdxf
 from ezdxf import units
+
+try:
+    import serial
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
 
 
 class EditorTrazos:
@@ -191,6 +201,20 @@ class EditorTrazos:
                             command=self._clear_canvas,
                             bg="#D84A4A", fg="white", activebackground="#B83838")
         clear_btn.pack(pady=5, padx=10)
+
+        # Separador
+        ttk.Separator(left_frame, orient=tk.HORIZONTAL).pack(pady=10, fill=tk.X)
+
+        # Botón para abrir la ventana de programación SCARA
+        programar_btn = tk.Button(left_frame, text="🤖 Programar",
+                                  command=self._open_programar,
+                                  bg="#2E7D32", fg="white", activebackground="#1B5E20",
+                                  font=("Arial", 11, "bold"))
+        programar_btn.pack(pady=5, padx=10, fill=tk.X)
+
+    def _open_programar(self):
+        """Abre la ventana de programación DXF/Arduino SCARA."""
+        VentanaProgramar(self.root)
 
     def _create_tool_button(self, parent, text, tool):
         """Crea un botón de herramienta con estilo."""
@@ -966,6 +990,587 @@ class EditorTrazos:
         """Inicia el bucle principal de la aplicación."""
         self.root.mainloop()
 
+
+
+
+# Constantes de temporización para comunicación serial
+ARDUINO_RESET_DELAY = 2.0   # segundos de espera tras reset de Arduino al conectar
+SPEED_SET_DELAY = 0.05      # segundos de espera tras enviar comando de velocidad
+COMMAND_INTERVAL = 0.02     # segundos entre comandos de movimiento para no saturar Arduino
+
+class VentanaProgramar:
+    """
+    Ventana de programación para cargar archivos DXF y enviar trayectorias
+    al robot SCARA via Arduino por puerto serial.
+    """
+
+    DEFAULT_L1 = 150.0  # mm - Longitud del brazo 1
+    DEFAULT_L2 = 120.0  # mm - Longitud del brazo 2
+
+    def __init__(self, parent):
+        """
+        Inicializa la ventana de programación.
+
+        Args:
+            parent: Ventana padre de Tkinter
+        """
+        self.window = tk.Toplevel(parent)
+        self.window.title("Programar Robot SCARA")
+        self.window.geometry("900x700")
+        self.window.resizable(True, True)
+
+        self.bg_color = "#E8F4F8"
+        self.panel_color = "#B8D8E8"
+        self.button_color = "#4A90A4"
+        self.button_active = "#357A8C"
+        self.window.configure(bg=self.bg_color)
+
+        self.trajectory_mm = []
+        self.trajectory_points = []
+        self.serial_conn = None
+        self._stop_event = threading.Event()  # Señal para detener el envío
+        self._stop_event.set()  # Inicialmente no hay envío en curso
+        self._send_thread = None
+        self._reader_thread = None
+
+        self.l1_var = tk.StringVar(value=str(self.DEFAULT_L1))
+        self.l2_var = tk.StringVar(value=str(self.DEFAULT_L2))
+        self.speed_var = tk.IntVar(value=50)
+        self.port_var = tk.StringVar()
+
+        self._build_ui()
+
+    # ------------------------------------------------------------------ #
+    # Construcción de la interfaz                                         #
+    # ------------------------------------------------------------------ #
+
+    def _build_ui(self):
+        """Construye todos los componentes de la interfaz."""
+        # Barra superior
+        top_frame = tk.Frame(self.window, bg=self.panel_color)
+        top_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+        tk.Label(top_frame, text="Programar Robot SCARA",
+                 font=("Arial", 14, "bold"),
+                 bg=self.panel_color, fg="#1A5A6A").pack(side=tk.LEFT, padx=10, pady=5)
+
+        tk.Button(top_frame, text="📂 Cargar DXF",
+                  command=self._load_dxf,
+                  bg=self.button_color, fg="white",
+                  activebackground=self.button_active).pack(side=tk.LEFT, padx=5, pady=5)
+
+        # Controles de conexión serial
+        conn_frame = tk.Frame(top_frame, bg=self.panel_color)
+        conn_frame.pack(side=tk.RIGHT, padx=10, pady=5)
+
+        tk.Label(conn_frame, text="Puerto:", bg=self.panel_color).pack(side=tk.LEFT)
+
+        self.port_combo = ttk.Combobox(conn_frame, textvariable=self.port_var,
+                                       width=10, state="readonly")
+        self.port_combo.pack(side=tk.LEFT, padx=3)
+
+        tk.Button(conn_frame, text="🔄",
+                  command=self._refresh_ports,
+                  bg=self.panel_color).pack(side=tk.LEFT)
+
+        self.connect_btn = tk.Button(conn_frame, text="Conectar",
+                                     command=self._toggle_connection,
+                                     bg=self.button_color, fg="white",
+                                     activebackground=self.button_active)
+        self.connect_btn.pack(side=tk.LEFT, padx=5)
+
+        self.status_label = tk.Label(conn_frame, text="● Desconectado",
+                                     fg="#CC0000", bg=self.panel_color,
+                                     font=("Arial", 10, "bold"))
+        self.status_label.pack(side=tk.LEFT, padx=5)
+
+        # Panel central
+        center_frame = tk.Frame(self.window, bg=self.bg_color)
+        center_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        traj_label_frame = tk.LabelFrame(center_frame,
+                                          text="Visualización de Trayectoria",
+                                          bg=self.bg_color, fg="#1A5A6A",
+                                          font=("Arial", 10, "bold"))
+        traj_label_frame.pack(fill=tk.BOTH, expand=True, side=tk.LEFT, padx=5)
+
+        self.traj_canvas = tk.Canvas(traj_label_frame, bg="white",
+                                     highlightthickness=1,
+                                     highlightbackground=self.button_color)
+        self.traj_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # Panel derecho
+        right_frame = tk.Frame(center_frame, bg=self.bg_color, width=250)
+        right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=5)
+        right_frame.pack_propagate(False)
+
+        # Configuración del robot
+        config_frame = tk.LabelFrame(right_frame, text="Configuración SCARA",
+                                     bg=self.bg_color, fg="#1A5A6A",
+                                     font=("Arial", 10, "bold"))
+        config_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        row_l1 = tk.Frame(config_frame, bg=self.bg_color)
+        row_l1.pack(fill=tk.X, padx=5, pady=3)
+        tk.Label(row_l1, text="L1 (mm):", bg=self.bg_color, width=9,
+                 anchor=tk.W).pack(side=tk.LEFT)
+        tk.Entry(row_l1, textvariable=self.l1_var, width=8).pack(side=tk.LEFT, padx=3)
+
+        row_l2 = tk.Frame(config_frame, bg=self.bg_color)
+        row_l2.pack(fill=tk.X, padx=5, pady=3)
+        tk.Label(row_l2, text="L2 (mm):", bg=self.bg_color, width=9,
+                 anchor=tk.W).pack(side=tk.LEFT)
+        tk.Entry(row_l2, textvariable=self.l2_var, width=8).pack(side=tk.LEFT, padx=3)
+
+        # Velocidad
+        speed_frame = tk.LabelFrame(right_frame, text="Velocidad",
+                                    bg=self.bg_color, fg="#1A5A6A",
+                                    font=("Arial", 10, "bold"))
+        speed_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.speed_scale = tk.Scale(speed_frame, from_=1, to=100,
+                                    orient=tk.HORIZONTAL,
+                                    variable=self.speed_var,
+                                    bg=self.bg_color,
+                                    label="%")
+        self.speed_scale.pack(fill=tk.X, padx=5, pady=3)
+
+        # Botones de acción
+        actions_frame = tk.LabelFrame(right_frame, text="Acciones",
+                                      bg=self.bg_color, fg="#1A5A6A",
+                                      font=("Arial", 10, "bold"))
+        actions_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        self.send_btn = tk.Button(actions_frame, text="▶ Enviar a Arduino",
+                                  command=self._send_trajectory,
+                                  bg="#2E7D32", fg="white",
+                                  activebackground="#1B5E20",
+                                  font=("Arial", 10, "bold"),
+                                  state=tk.DISABLED)
+        self.send_btn.pack(fill=tk.X, padx=5, pady=3)
+
+        tk.Button(actions_frame, text="⏹ Detener",
+                  command=self._send_stop,
+                  bg="#C62828", fg="white",
+                  activebackground="#B71C1C").pack(fill=tk.X, padx=5, pady=3)
+
+        tk.Button(actions_frame, text="🏠 Homing",
+                  command=self._send_home,
+                  bg=self.button_color, fg="white",
+                  activebackground=self.button_active).pack(fill=tk.X, padx=5, pady=3)
+
+        tk.Button(actions_frame, text="📍 Posición Actual",
+                  command=self._request_position,
+                  bg=self.button_color, fg="white",
+                  activebackground=self.button_active).pack(fill=tk.X, padx=5, pady=3)
+
+        # Área de log
+        log_frame = tk.LabelFrame(right_frame, text="Log",
+                                  bg=self.bg_color, fg="#1A5A6A",
+                                  font=("Arial", 10, "bold"))
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.log_text = tk.Text(log_frame, height=10, state=tk.DISABLED,
+                                bg="#F0F0F0", font=("Courier", 9),
+                                wrap=tk.WORD)
+        log_scroll = tk.Scrollbar(log_frame, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scroll.set)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(fill=tk.BOTH, expand=True, padx=3, pady=3)
+
+        self._refresh_ports()
+
+        if not SERIAL_AVAILABLE:
+            self._log("⚠ pyserial no instalado. Instálalo con: pip install pyserial")
+        else:
+            self._log("✓ Listo. Cargue un DXF y conecte Arduino.")
+
+    # ------------------------------------------------------------------ #
+    # Utilidades de log                                                   #
+    # ------------------------------------------------------------------ #
+
+    def _log(self, message):
+        """Agrega un mensaje al área de log."""
+        self.log_text.configure(state=tk.NORMAL)
+        self.log_text.insert(tk.END, "> " + str(message) + "\n")
+        self.log_text.see(tk.END)
+        self.log_text.configure(state=tk.DISABLED)
+
+    # ------------------------------------------------------------------ #
+    # Gestión de puertos seriales                                         #
+    # ------------------------------------------------------------------ #
+
+    def _refresh_ports(self):
+        """Actualiza la lista de puertos seriales disponibles."""
+        if not SERIAL_AVAILABLE:
+            self.port_combo["values"] = []
+            return
+        ports = [p.device for p in serial.tools.list_ports.comports()]
+        self.port_combo["values"] = ports
+        if ports and not self.port_var.get():
+            self.port_var.set(ports[0])
+
+    def _toggle_connection(self):
+        """Conecta o desconecta del puerto serial."""
+        if not SERIAL_AVAILABLE:
+            self._log("Error: pyserial no está instalado.")
+            return
+        if self.serial_conn and self.serial_conn.is_open:
+            self._disconnect()
+        else:
+            self._connect()
+
+    def _connect(self):
+        """Establece conexión serial con Arduino."""
+        port = self.port_var.get()
+        if not port:
+            self._log("Error: seleccione un puerto serial.")
+            return
+        try:
+            self.serial_conn = serial.Serial(port, 115200, timeout=1)
+            time.sleep(ARDUINO_RESET_DELAY)  # Esperar reset de Arduino
+            self.connect_btn.configure(text="Desconectar")
+            self.status_label.configure(text="● Conectado", fg="#007700")
+            self._log("Conectado a " + port + " a 115200 baudios.")
+            self._update_send_btn()
+            self._reader_thread = threading.Thread(
+                target=self._read_serial_loop, daemon=True)
+            self._reader_thread.start()
+        except serial.SerialException as e:
+            self._log("Error al conectar: " + str(e))
+
+    def _disconnect(self):
+        """Cierra la conexión serial."""
+        if self.serial_conn:
+            try:
+                self.serial_conn.close()
+            except Exception:
+                pass
+            self.serial_conn = None
+        self.connect_btn.configure(text="Conectar")
+        self.status_label.configure(text="● Desconectado", fg="#CC0000")
+        self._log("Desconectado.")
+        self._update_send_btn()
+
+    def _read_serial_loop(self):
+        """Hilo en segundo plano que lee respuestas del Arduino."""
+        while self.serial_conn and self.serial_conn.is_open:
+            try:
+                line = self.serial_conn.readline().decode("utf-8", errors="replace").strip()
+                if line:
+                    self.window.after(0, self._log, "Arduino: " + line)
+            except (serial.SerialException, OSError):
+                break
+
+    def _send_command(self, cmd):
+        """Envía un comando al Arduino por serial."""
+        if not self.serial_conn or not self.serial_conn.is_open:
+            self._log("Error: no hay conexión serial activa.")
+            return False
+        try:
+            self.serial_conn.write((cmd.strip() + "\n").encode("utf-8"))
+            return True
+        except serial.SerialException as e:
+            self._log("Error al enviar comando: " + str(e))
+            return False
+
+    # ------------------------------------------------------------------ #
+    # Carga y procesamiento de DXF                                        #
+    # ------------------------------------------------------------------ #
+
+    def _load_dxf(self):
+        """Abre un DXF, extrae puntos y dibuja la trayectoria."""
+        filename = filedialog.askopenfilename(
+            filetypes=[("DXF files", "*.dxf"), ("All files", "*.*")]
+        )
+        if not filename:
+            return
+        try:
+            doc = ezdxf.readfile(filename)
+            msp = doc.modelspace()
+            unit_scale = self._get_unit_scale(doc)
+
+            segments = []
+            for entity in msp:
+                segs = self._entity_to_segments(entity, unit_scale)
+                segments.extend(segs)
+
+            if not segments:
+                self._log("Advertencia: el DXF no contiene entidades reconocibles.")
+                return
+
+            self.trajectory_mm = segments
+            self.trajectory_points = self._segments_to_path(segments)
+
+            self._draw_trajectory()
+            fname = filename.replace("\\", "/").split("/")[-1]
+            self._log(
+                "Trayectoria cargada: " + str(len(self.trajectory_points)) +
+                " puntos desde \"" + fname + "\"")
+            self._update_send_btn()
+
+        except Exception as e:
+            self._log("Error al cargar DXF: " + str(e))
+
+    @staticmethod
+    def _get_unit_scale(doc):
+        """Devuelve factor de escala para convertir unidades DXF a mm."""
+        insunits = doc.header.get("$INSUNITS", doc.units)
+        unit_map = {
+            units.MM: 1.0,
+            units.CM: 10.0,
+            units.M: 1000.0,
+            units.IN: 25.4,
+            units.FT: 304.8,
+            0: 1.0,
+        }
+        return unit_map.get(insunits, 1.0)
+
+    @staticmethod
+    def _entity_to_segments(entity, unit_scale, arc_segments=64):
+        """
+        Convierte una entidad DXF en lista de segmentos [(x1,y1,x2,y2)] en mm.
+        """
+        dtype = entity.dxftype()
+        pts = []
+
+        if dtype == "LINE":
+            s = entity.dxf.start
+            e = entity.dxf.end
+            pts = [
+                (s[0] * unit_scale, s[1] * unit_scale),
+                (e[0] * unit_scale, e[1] * unit_scale),
+            ]
+
+        elif dtype == "LWPOLYLINE":
+            for p in entity.get_points("xy"):
+                pts.append((p[0] * unit_scale, p[1] * unit_scale))
+
+        elif dtype == "POLYLINE":
+            for v in entity.vertices:
+                loc = v.dxf.location
+                pts.append((loc[0] * unit_scale, loc[1] * unit_scale))
+
+        elif dtype == "CIRCLE":
+            cx = entity.dxf.center[0] * unit_scale
+            cy = entity.dxf.center[1] * unit_scale
+            r = entity.dxf.radius * unit_scale
+            for i in range(arc_segments + 1):
+                angle = 2 * math.pi * i / arc_segments
+                pts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
+
+        elif dtype == "ARC":
+            cx = entity.dxf.center[0] * unit_scale
+            cy = entity.dxf.center[1] * unit_scale
+            r = entity.dxf.radius * unit_scale
+            start_a = math.radians(entity.dxf.start_angle)
+            end_a = math.radians(entity.dxf.end_angle)
+            if end_a <= start_a:
+                end_a += 2 * math.pi
+            for i in range(arc_segments + 1):
+                angle = start_a + (end_a - start_a) * i / arc_segments
+                pts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
+
+        elif dtype in ("SPLINE", "ELLIPSE"):
+            try:
+                for p in entity.flattening(distance=0.5):
+                    pts.append((p.x * unit_scale, p.y * unit_scale))
+            except Exception:
+                pass
+
+        segs = []
+        for i in range(len(pts) - 1):
+            segs.append((pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]))
+        return segs
+
+    @staticmethod
+    def _segments_to_path(segments):
+        """
+        Convierte lista de segmentos en una trayectoria ordenada de puntos,
+        eliminando duplicados consecutivos.
+        """
+        if not segments:
+            return []
+        path = [(segments[0][0], segments[0][1])]
+        for x1, y1, x2, y2 in segments:
+            if (x1, y1) != path[-1]:
+                path.append((x1, y1))
+            path.append((x2, y2))
+        return path
+
+    def _draw_trajectory(self):
+        """Dibuja la trayectoria en el canvas de visualización."""
+        self.traj_canvas.delete("all")
+        if not self.trajectory_mm:
+            return
+
+        all_x = [x for x1, y1, x2, y2 in self.trajectory_mm for x in (x1, x2)]
+        all_y = [y for x1, y1, x2, y2 in self.trajectory_mm for y in (y1, y2)]
+        min_x, max_x = min(all_x), max(all_x)
+        min_y, max_y = min(all_y), max(all_y)
+
+        w = self.traj_canvas.winfo_width() or 400
+        h = self.traj_canvas.winfo_height() or 300
+        margin = 20
+
+        span_x = max_x - min_x or 1
+        span_y = max_y - min_y or 1
+        scale = min((w - 2 * margin) / span_x, (h - 2 * margin) / span_y)
+
+        def to_canvas(x, y):
+            cx = margin + (x - min_x) * scale
+            cy = h - margin - (y - min_y) * scale
+            return cx, cy
+
+        # Dibujar área de trabajo SCARA
+        try:
+            l1 = float(self.l1_var.get())
+            l2 = float(self.l2_var.get())
+            r_max = (l1 + l2) * scale
+            r_min = abs(l1 - l2) * scale
+            cx0, cy0 = to_canvas(0, 0)
+            self.traj_canvas.create_oval(
+                cx0 - r_max, cy0 - r_max, cx0 + r_max, cy0 + r_max,
+                outline="#CCDDFF", dash=(4, 4))
+            if r_min > 2:
+                self.traj_canvas.create_oval(
+                    cx0 - r_min, cy0 - r_min, cx0 + r_min, cy0 + r_min,
+                    outline="#FFCCCC", dash=(4, 4))
+        except (ValueError, tk.TclError):
+            pass
+
+        # Dibujar segmentos de la trayectoria
+        for x1, y1, x2, y2 in self.trajectory_mm:
+            px1, py1 = to_canvas(x1, y1)
+            px2, py2 = to_canvas(x2, y2)
+            self.traj_canvas.create_line(px1, py1, px2, py2,
+                                         fill="#1A5A6A", width=1)
+
+        # Marcar origen
+        ox, oy = to_canvas(0, 0)
+        r = 4
+        self.traj_canvas.create_oval(ox - r, oy - r, ox + r, oy + r,
+                                     fill="red", outline="red")
+        self.traj_canvas.create_text(ox + 8, oy - 8, text="(0,0)",
+                                     fill="red", font=("Arial", 8))
+
+    # ------------------------------------------------------------------ #
+    # Cinemática inversa SCARA                                           #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _inverse_kinematics(x, y, l1, l2):
+        """
+        Calcula cinemática inversa para robot SCARA de 2 DOF.
+
+        Args:
+            x, y: Coordenada objetivo en mm
+            l1: Longitud del brazo 1 en mm
+            l2: Longitud del brazo 2 en mm
+
+        Returns:
+            (theta1_deg, theta2_deg) o None si el punto no es alcanzable.
+        """
+        d2 = x * x + y * y
+        cos_theta2 = (d2 - l1 * l1 - l2 * l2) / (2.0 * l1 * l2)
+
+        if cos_theta2 < -1.0 or cos_theta2 > 1.0:
+            return None  # Fuera del espacio de trabajo
+
+        theta2 = math.acos(cos_theta2)
+        theta1 = math.atan2(y, x) - math.atan2(
+            l2 * math.sin(theta2), l1 + l2 * math.cos(theta2))
+
+        return math.degrees(theta1), math.degrees(theta2)
+
+    # ------------------------------------------------------------------ #
+    # Envío de trayectoria al Arduino                                     #
+    # ------------------------------------------------------------------ #
+
+    def _update_send_btn(self):
+        """Habilita/deshabilita el botón de envío según el estado."""
+        connected = bool(self.serial_conn and self.serial_conn.is_open)
+        has_traj = bool(self.trajectory_points)
+        sending = not self._stop_event.is_set() and self._send_thread is not None and self._send_thread.is_alive()
+        state = tk.NORMAL if (connected and has_traj and not sending) else tk.DISABLED
+        self.send_btn.configure(state=state)
+
+    def _update_send_btn_sending(self, is_sending):
+        """Actualiza el botón de envío durante el envío activo."""
+        state = tk.DISABLED if is_sending else tk.NORMAL
+        self.send_btn.configure(state=state)
+
+    def _send_trajectory(self):
+        """Envía la trayectoria al Arduino en un hilo separado."""
+        if self.sending:
+            return
+        self._stop_event.clear()
+        self._update_send_btn_sending(True)
+        self._send_thread = threading.Thread(
+            target=self._send_trajectory_worker, daemon=True)
+        self._send_thread.start()
+
+    def _send_trajectory_worker(self):
+        """Hilo que envía comandos G0 para cada punto de la trayectoria."""
+        try:
+            l1 = float(self.l1_var.get())
+            l2 = float(self.l2_var.get())
+        except ValueError:
+            self.window.after(0, self._log, "Error: L1 y L2 deben ser números.")
+            self.sending = False
+            self.window.after(0, self._update_send_btn)
+            return
+
+        speed = self.speed_var.get()
+        self.window.after(0, self._log,
+                          "Enviando " + str(len(self.trajectory_points)) +
+                          " puntos (L1=" + str(l1) + " mm, L2=" + str(l2) +
+                          " mm, vel=" + str(speed) + "%)...")
+
+        self._send_command("M220 S" + str(speed))
+        time.sleep(SPEED_SET_DELAY)  # Esperar que Arduino procese velocidad
+
+        skipped = 0
+        for x, y in self.trajectory_points:
+            if self._stop_event.is_set():
+                break
+            angles = self._inverse_kinematics(x, y, l1, l2)
+            if angles is None:
+                skipped += 1
+                continue
+            theta1, theta2 = angles
+            cmd = ("G0 X" + "{:.3f}".format(x) +
+                   " Y" + "{:.3f}".format(y) +
+                   " A" + "{:.3f}".format(theta1) +
+                   " B" + "{:.3f}".format(theta2))
+            if not self._send_command(cmd):
+                break
+            time.sleep(COMMAND_INTERVAL)  # Pausa entre comandos para no saturar buffer
+
+        if skipped:
+            self.window.after(0, self._log,
+                              "Advertencia: " + str(skipped) +
+                              " punto(s) fuera del espacio de trabajo.")
+        self.window.after(0, self._log, "Envío completado.")
+        self._stop_event.set()
+        self.window.after(0, self._update_send_btn)
+
+    def _send_stop(self):
+        """Envía comando de parada al Arduino."""
+        self._stop_event.set()  # Señalizar hilo de envío para que se detenga
+        if self._send_command("M0"):
+            self._log("Comando STOP enviado.")
+        self._update_send_btn()
+
+    def _send_home(self):
+        """Envía comando de homing al Arduino."""
+        if self._send_command("M100"):
+            self._log("Comando HOME enviado.")
+
+    def _request_position(self):
+        """Solicita la posición actual al Arduino."""
+        if self._send_command("M114"):
+            self._log("Solicitud de posición enviada.")
 
 def main():
     """Función principal para ejecutar la aplicación."""
