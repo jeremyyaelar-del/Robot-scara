@@ -1,0 +1,7 @@
+# Dependencias Python para SCARA Trajectory Visualizer
+# Instalar con:  pip install -r requirements.txt
+
+pyserial>=3.5
+matplotlib>=3.7
+ezdxf>=1.1
+numpy>=1.24
