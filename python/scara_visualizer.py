@@ -62,6 +62,7 @@ DEFAULT_GR1     = 1.0     # relación de reducción motor 1
 DEFAULT_GR2     = 1.0     # relación de reducción motor 2
 MAX_TRAIL_PTS   = 10_000  # puntos máximos en buffer de trayectoria
 UPDATE_INTERVAL = 30      # ms entre frames de animación
+STAMP_CIRCLE_R  = 5.0     # radio del círculo timbrado (mm) → diámetro 10 mm = 1 cm
 
 # ══════════════════════════════════════════════════════════════════════════
 class ScaraVisualizer:
@@ -102,6 +103,9 @@ class ScaraVisualizer:
         self._straight_lines: List[Tuple[Tuple[float, float],
                                          Tuple[float, float]]] = []
 
+        # Lista de círculos timbrados: [(cx, cy), ...]
+        self._stamp_circles: List[Tuple[float, float]] = []
+
         # Flags de control
         self._capturing   = False
         self._running     = True
@@ -132,12 +136,13 @@ class ScaraVisualizer:
         btn_cfg = dict(color="#2a2d3e", hovercolor="#3a3f5c")
 
         ax_btn_start  = self.fig.add_axes([0.76, 0.82, 0.21, 0.06])
-        ax_btn_stop   = self.fig.add_axes([0.76, 0.74, 0.21, 0.06])
-        ax_btn_clear  = self.fig.add_axes([0.76, 0.66, 0.21, 0.06])
-        ax_btn_export = self.fig.add_axes([0.76, 0.58, 0.21, 0.06])
-        ax_btn_home   = self.fig.add_axes([0.76, 0.50, 0.21, 0.06])
-        ax_btn_reset  = self.fig.add_axes([0.76, 0.42, 0.21, 0.06])
-        ax_btn_line   = self.fig.add_axes([0.76, 0.34, 0.21, 0.06])
+        ax_btn_stop   = self.fig.add_axes([0.76, 0.75, 0.21, 0.06])
+        ax_btn_clear  = self.fig.add_axes([0.76, 0.68, 0.21, 0.06])
+        ax_btn_export = self.fig.add_axes([0.76, 0.61, 0.21, 0.06])
+        ax_btn_home   = self.fig.add_axes([0.76, 0.54, 0.21, 0.06])
+        ax_btn_reset  = self.fig.add_axes([0.76, 0.47, 0.21, 0.06])
+        ax_btn_line   = self.fig.add_axes([0.76, 0.40, 0.21, 0.06])
+        ax_btn_circle = self.fig.add_axes([0.76, 0.33, 0.21, 0.06])
 
         self.btn_start  = Button(ax_btn_start,  "▶ Iniciar Captura",  **btn_cfg)
         self.btn_stop   = Button(ax_btn_stop,   "■ Detener Captura",  **btn_cfg)
@@ -146,10 +151,11 @@ class ScaraVisualizer:
         self.btn_home   = Button(ax_btn_home,   "⌂ Home",             **btn_cfg)
         self.btn_reset  = Button(ax_btn_reset,  "↺ Reset Contadores", **btn_cfg)
         self.btn_line   = Button(ax_btn_line,   "↗ Línea Recta",      **btn_cfg)
+        self.btn_circle = Button(ax_btn_circle, "⊙ Círculo 1 cm",     **btn_cfg)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_clear,
                     self.btn_export, self.btn_home, self.btn_reset,
-                    self.btn_line):
+                    self.btn_line, self.btn_circle):
             btn.label.set_color("white")
             btn.label.set_fontsize(9)
 
@@ -160,6 +166,7 @@ class ScaraVisualizer:
         self.btn_home  .on_clicked(self._on_home)
         self.btn_reset .on_clicked(self._on_reset)
         self.btn_line  .on_clicked(self._on_line_point)
+        self.btn_circle.on_clicked(self._on_circle)
 
         # ── TextBox para L1, L2, G1, G2 ────────────────────────────────
         ax_l1_lbl = self.fig.add_axes([0.76, 0.27, 0.09, 0.045])
@@ -269,6 +276,10 @@ class ScaraVisualizer:
         # Marcador del punto inicial de una línea recta en progreso
         self._dot_line_start, = self.ax.plot([], [], "*", color="#ff44ff",
                                              markersize=12)
+        # Círculos timbrados (⊙ 1 cm de diámetro), curvas paramétricas separadas por NaN
+        self._line_circles, = self.ax.plot([], [], "-", color="#44ffcc",
+                                           linewidth=1.5, alpha=0.9,
+                                           label="Círculos 1 cm")
 
         legend = self.ax.legend(loc="upper right", fontsize=7,
                                 facecolor="#1e2130", edgecolor="#444466",
@@ -390,6 +401,7 @@ class ScaraVisualizer:
             t1, t2 = self.theta1, self.theta2
             sl = list(self._straight_lines)
             ls = self._line_start
+            sc = list(self._stamp_circles)
 
         # Trayectoria completa
         self._line_trail.set_data(tx, ty)
@@ -420,13 +432,25 @@ class ScaraVisualizer:
         else:
             self._dot_line_start.set_data([], [])
 
+        # Círculos timbrados (curvas paramétricas separadas por NaN)
+        if sc:
+            nan = float("nan")
+            theta_pts = np.linspace(0, 2 * math.pi, 64)
+            cxs, cys = [], []
+            for (ccx, ccy) in sc:
+                cxs += list(ccx + STAMP_CIRCLE_R * np.cos(theta_pts)) + [nan]
+                cys += list(ccy + STAMP_CIRCLE_R * np.sin(theta_pts)) + [nan]
+            self._line_circles.set_data(cxs, cys)
+        else:
+            self._line_circles.set_data([], [])
+
         # Panel informativo
         self._info_text.set_text(self._info_str(x, y, t1, t2))
 
         return (self._line_trail, self._line_capture,
                 self._line_link1, self._line_link2,
                 self._dot_ee, self._line_straight_all,
-                self._dot_line_start, self._info_text)
+                self._dot_line_start, self._line_circles, self._info_text)
 
     def _info_str(self, x=None, y=None, t1=None, t2=None) -> str:
         x  = x  if x  is not None else self.x
@@ -485,6 +509,7 @@ class ScaraVisualizer:
             self._total_points   = 0
             self._captured_count = 0
             self._straight_lines = []
+            self._stamp_circles  = []
         self._line_start = None
         self._set_status("Trayectoria limpiada")
 
@@ -496,18 +521,19 @@ class ScaraVisualizer:
         with self._serial_lock:
             segments = [list(s) for s in self._segments]
             straight = list(self._straight_lines)
+            circles  = list(self._stamp_circles)
             # También incluir captura activa si tiene puntos
             if self._capture_x and len(self._capture_x) >= 2:
                 segments.append(list(zip(self._capture_x, self._capture_y)))
 
-        if not segments and not straight:
+        if not segments and not straight and not circles:
             self._set_status("Sin trayectoria capturada para exportar")
             return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"scara_trajectory_{ts}.dxf"
         try:
-            self._export_dxf(segments, straight, filename)
+            self._export_dxf(segments, straight, circles, filename)
             self._set_status(f"DXF exportado → {filename}")
         except Exception as exc:
             self._set_status(f"ERROR exportando DXF: {exc}")
@@ -561,6 +587,16 @@ class ScaraVisualizer:
                 f"↗ Línea recta: ({start[0]:.1f},{start[1]:.1f}) → "
                 f"({x:.1f},{y:.1f})"
             )
+
+    def _on_circle(self, _event):
+        """Timbra un círculo de diámetro 1 cm centrado en el efector final."""
+        with self._serial_lock:
+            x, y = self.x, self.y
+        with self._serial_lock:
+            self._stamp_circles.append((x, y))
+        self._set_status(
+            f"⊙ Círculo 1 cm añadido en ({x:.1f}, {y:.1f}) mm"
+        )
 
     def _on_l1_change(self, text: str):
         try:
@@ -635,7 +671,8 @@ class ScaraVisualizer:
                 pass
 
     # ── Exportación DXF ───────────────────────────────────────────────────
-    def _export_dxf(self, segments: list, straight_lines: list, filename: str):
+    def _export_dxf(self, segments: list, straight_lines: list,
+                    stamp_circles: list, filename: str):
         """Genera un archivo DXF con las trayectorias capturadas."""
         doc = ezdxf.new(dxfversion="R2010")
         doc.units = dxf_units.MM
@@ -645,6 +682,8 @@ class ScaraVisualizer:
                        dxfattribs={"color": 1, "linetype": "CONTINUOUS"})
         doc.layers.new(name="STRAIGHT_LINES",
                        dxfattribs={"color": 6, "linetype": "CONTINUOUS"})
+        doc.layers.new(name="CIRCLES",
+                       dxfattribs={"color": 4, "linetype": "CONTINUOUS"})
         doc.layers.new(name="METADATA",
                        dxfattribs={"color": 7, "linetype": "CONTINUOUS"})
 
@@ -664,14 +703,18 @@ class ScaraVisualizer:
             msp.add_line((float(x0), float(y0)), (float(x1), float(y1)),
                          dxfattribs={"layer": "STRAIGHT_LINES", "color": 6})
 
+        for (ccx, ccy) in stamp_circles:
+            msp.add_circle((float(ccx), float(ccy)), STAMP_CIRCLE_R,
+                           dxfattribs={"layer": "CIRCLES", "color": 4})
+
         # Texto de metadatos
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         metadata = (
             f"Generado: {ts}  |  "
             f"L1={self.L1:.1f}mm  L2={self.L2:.1f}mm  |  "
-            f"Segmentos={len(segments)}  Líneas rectas={len(straight_lines)}"
+            f"Segmentos={len(segments)}  Líneas rectas={len(straight_lines)}  "
+            f"Círculos={len(stamp_circles)}"
         )
-        total_pts = sum(len(s) for s in segments)
         msp.add_text(
             metadata,
             dxfattribs={
