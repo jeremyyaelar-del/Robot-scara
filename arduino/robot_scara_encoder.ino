@@ -23,6 +23,8 @@
  *            'S' → solicitar muestra inmediata
  *            'L1:xxx.x' → establecer longitud eslabón 1 (mm)
  *            'L2:xxx.x' → establecer longitud eslabón 2 (mm)
+ *            'G1:xxx.xx' → establecer relación de reducción motor 1
+ *            'G2:xxx.xx' → establecer relación de reducción motor 2
  */
 
 // ─── Librería de encoders (Paul Stoffregen) ────────────────────────────────
@@ -36,6 +38,12 @@ float L2 = 100.0;   // Longitud eslabón 2 [mm]
 
 // Resolución del encoder con cuadratura 4x: 600 PPR × 4 = 2400 cuentas/rev
 const float COUNTS_PER_REV = 2400.0;
+
+// Relación de reducción de cada articulación (ajusta según tu reductor).
+// Ejemplo: si el reductor es 10:1, GEAR_RATIO = 10.0
+// La fórmula aplicada es: theta = counts / (COUNTS_PER_REV * GEAR_RATIO) * 360
+float GEAR_RATIO_1 = 1.0;   // Relación de reducción motor 1
+float GEAR_RATIO_2 = 1.0;   // Relación de reducción motor 2
 
 // Velocidad de muestreo: enviar datos cada SAMPLE_INTERVAL ms
 const unsigned long SAMPLE_INTERVAL = 20;   // 50 Hz
@@ -97,8 +105,12 @@ void setup() {
     Serial.print(L1, 1);
     Serial.print(F("mm  L2="));
     Serial.print(L2, 1);
-    Serial.println(F("mm  Res=2400 cuentas/rev"));
-    Serial.println(F("# Comandos: H=home R=reset S=muestra L1:xxx L2:xxx"));
+    Serial.print(F("mm  G1="));
+    Serial.print(GEAR_RATIO_1, 2);
+    Serial.print(F("  G2="));
+    Serial.print(GEAR_RATIO_2, 2);
+    Serial.println(F("  Res=2400 cuentas/rev"));
+    Serial.println(F("# Comandos: H=home R=reset S=muestra L1:xxx L2:xxx G1:xxx G2:xxx"));
     digitalWrite(LED_PIN, HIGH);
 }
 
@@ -109,8 +121,8 @@ void loop() {
     count2 = enc2.read();
 
     // ── Convertir a ángulos ───────────────────────────────────────────────
-    theta1_deg = (float)count1 / COUNTS_PER_REV * 360.0;
-    theta2_deg = (float)count2 / COUNTS_PER_REV * 360.0;
+    theta1_deg = (float)count1 / (COUNTS_PER_REV * GEAR_RATIO_1) * 360.0;
+    theta2_deg = (float)count2 / (COUNTS_PER_REV * GEAR_RATIO_2) * 360.0;
 
     // ── Cinemática directa ────────────────────────────────────────────────
     forwardKinematics(theta1_deg, theta2_deg, x_pos, y_pos);
@@ -238,6 +250,26 @@ void processCommand(String cmd) {
             Serial.println(F(" mm"));
         } else {
             Serial.println(F("# ERROR: L2 debe ser > 0"));
+        }
+
+    } else if (cmd.startsWith("G1:")) {
+        float val = cmd.substring(3).toFloat();
+        if (val > 0.0) {
+            GEAR_RATIO_1 = val;
+            Serial.print(F("# GEAR_RATIO_1 = "));
+            Serial.println(GEAR_RATIO_1, 3);
+        } else {
+            Serial.println(F("# ERROR: G1 debe ser > 0"));
+        }
+
+    } else if (cmd.startsWith("G2:")) {
+        float val = cmd.substring(3).toFloat();
+        if (val > 0.0) {
+            GEAR_RATIO_2 = val;
+            Serial.print(F("# GEAR_RATIO_2 = "));
+            Serial.println(GEAR_RATIO_2, 3);
+        } else {
+            Serial.println(F("# ERROR: G2 debe ser > 0"));
         }
 
     } else {

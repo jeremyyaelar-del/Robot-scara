@@ -58,6 +58,8 @@ except ImportError:
 DEFAULT_BAUD    = 115200
 DEFAULT_L1      = 150.0   # mm
 DEFAULT_L2      = 100.0   # mm
+DEFAULT_GR1     = 1.0     # relación de reducción motor 1
+DEFAULT_GR2     = 1.0     # relación de reducción motor 2
 MAX_TRAIL_PTS   = 10_000  # puntos máximos en buffer de trayectoria
 UPDATE_INTERVAL = 30      # ms entre frames de animación
 
@@ -65,11 +67,16 @@ UPDATE_INTERVAL = 30      # ms entre frames de animación
 class ScaraVisualizer:
     """Aplicación principal de visualización y captura de trayectorias."""
 
-    def __init__(self, port: Optional[str], baud: int, l1: float, l2: float):
+    def __init__(self, port: Optional[str], baud: int, l1: float, l2: float,
+                 gr1: float = DEFAULT_GR1, gr2: float = DEFAULT_GR2):
         self.port  = port
         self.baud  = baud
         self.L1    = l1
         self.L2    = l2
+
+        # Relaciones de reducción (reductores)
+        self.gear_ratio_1 = gr1
+        self.gear_ratio_2 = gr2
 
         # Estado del robot
         self.theta1 = 0.0   # grados
@@ -154,30 +161,48 @@ class ScaraVisualizer:
         self.btn_reset .on_clicked(self._on_reset)
         self.btn_line  .on_clicked(self._on_line_point)
 
-        # ── TextBox para L1, L2 ─────────────────────────────────────────
-        ax_l1_lbl = self.fig.add_axes([0.76, 0.24, 0.09, 0.05])
-        ax_l1_box = self.fig.add_axes([0.86, 0.24, 0.11, 0.05])
-        ax_l2_lbl = self.fig.add_axes([0.76, 0.17, 0.09, 0.05])
-        ax_l2_box = self.fig.add_axes([0.86, 0.17, 0.11, 0.05])
+        # ── TextBox para L1, L2, G1, G2 ────────────────────────────────
+        ax_l1_lbl = self.fig.add_axes([0.76, 0.27, 0.09, 0.045])
+        ax_l1_box = self.fig.add_axes([0.86, 0.27, 0.11, 0.045])
+        ax_l2_lbl = self.fig.add_axes([0.76, 0.21, 0.09, 0.045])
+        ax_l2_box = self.fig.add_axes([0.86, 0.21, 0.11, 0.045])
+        ax_g1_lbl = self.fig.add_axes([0.76, 0.15, 0.09, 0.045])
+        ax_g1_box = self.fig.add_axes([0.86, 0.15, 0.11, 0.045])
+        ax_g2_lbl = self.fig.add_axes([0.76, 0.09, 0.09, 0.045])
+        ax_g2_box = self.fig.add_axes([0.86, 0.09, 0.11, 0.045])
 
         ax_l1_lbl.set_facecolor("#1e2130"); ax_l1_lbl.axis("off")
         ax_l2_lbl.set_facecolor("#1e2130"); ax_l2_lbl.axis("off")
+        ax_g1_lbl.set_facecolor("#1e2130"); ax_g1_lbl.axis("off")
+        ax_g2_lbl.set_facecolor("#1e2130"); ax_g2_lbl.axis("off")
         ax_l1_lbl.text(0.5, 0.5, "L1 (mm)", ha="center", va="center",
                        color="white", fontsize=9)
         ax_l2_lbl.text(0.5, 0.5, "L2 (mm)", ha="center", va="center",
                        color="white", fontsize=9)
+        ax_g1_lbl.text(0.5, 0.5, "Reducc.1", ha="center", va="center",
+                       color="#ffdd88", fontsize=8)
+        ax_g2_lbl.text(0.5, 0.5, "Reducc.2", ha="center", va="center",
+                       color="#ffdd88", fontsize=8)
 
         self.tb_l1 = TextBox(ax_l1_box, "", initial=str(self.L1),
                              color="#2a2d3e", hovercolor="#3a3f5c")
         self.tb_l2 = TextBox(ax_l2_box, "", initial=str(self.L2),
                              color="#2a2d3e", hovercolor="#3a3f5c")
+        self.tb_g1 = TextBox(ax_g1_box, "", initial=str(self.gear_ratio_1),
+                             color="#2a2d3e", hovercolor="#3a3f5c")
+        self.tb_g2 = TextBox(ax_g2_box, "", initial=str(self.gear_ratio_2),
+                             color="#2a2d3e", hovercolor="#3a3f5c")
         self.tb_l1.label.set_color("white")
         self.tb_l2.label.set_color("white")
+        self.tb_g1.label.set_color("#ffdd88")
+        self.tb_g2.label.set_color("#ffdd88")
         self.tb_l1.on_submit(self._on_l1_change)
         self.tb_l2.on_submit(self._on_l2_change)
+        self.tb_g1.on_submit(self._on_gr1_change)
+        self.tb_g2.on_submit(self._on_gr2_change)
 
         # ── Área de información ─────────────────────────────────────────
-        ax_info = self.fig.add_axes([0.76, 0.03, 0.21, 0.12],
+        ax_info = self.fig.add_axes([0.76, 0.03, 0.21, 0.05],
                                     facecolor="#12141f")
         ax_info.axis("off")
         self._info_text = ax_info.text(
@@ -418,18 +443,9 @@ class ScaraVisualizer:
             trail_len += math.hypot(cx[i] - cx[i-1], cy[i] - cy[i-1])
 
         return (
-            f"X    : {x:+8.2f} mm\n"
-            f"Y    : {y:+8.2f} mm\n"
-            f"θ1   : {t1:+8.2f} °\n"
-            f"θ2   : {t2:+8.2f} °\n"
-            f"──────────────\n"
-            f"L1   : {self.L1:>8.1f} mm\n"
-            f"L2   : {self.L2:>8.1f} mm\n"
-            f"──────────────\n"
-            f"Pts totales : {self._total_points}\n"
-            f"Pts captura : {self._captured_count}\n"
-            f"Long captura: {trail_len:.1f} mm\n"
-            f"Segmentos   : {len(self._segments)}\n"
+            f"X:{x:+7.1f}mm  Y:{y:+7.1f}mm\n"
+            f"θ1:{t1:+7.1f}°  θ2:{t2:+7.1f}°\n"
+            f"Pts:{self._total_points:<5d} Seg:{len(self._segments)}\n"
         )
 
     def _set_status(self, msg: str):
@@ -570,6 +586,32 @@ class ScaraVisualizer:
         except ValueError:
             self._set_status("ERROR: L2 debe ser un número positivo")
 
+    def _on_gr1_change(self, text: str):
+        try:
+            val = float(text)
+            if val > 0:
+                self.gear_ratio_1 = val
+                if self._serial and self._serial_ok:
+                    self._serial.write(f"G1:{val:.3f}\n".encode())
+                self._set_status(f"Reducción motor 1 → {val:.3f}")
+            else:
+                self._set_status("ERROR: Reducc.1 debe ser > 0")
+        except ValueError:
+            self._set_status("ERROR: Reducc.1 debe ser un número positivo")
+
+    def _on_gr2_change(self, text: str):
+        try:
+            val = float(text)
+            if val > 0:
+                self.gear_ratio_2 = val
+                if self._serial and self._serial_ok:
+                    self._serial.write(f"G2:{val:.3f}\n".encode())
+                self._set_status(f"Reducción motor 2 → {val:.3f}")
+            else:
+                self._set_status("ERROR: Reducc.2 debe ser > 0")
+        except ValueError:
+            self._set_status("ERROR: Reducc.2 debe ser un número positivo")
+
     def _refresh_reach_circle(self):
         """Actualiza el círculo de alcance máximo al cambiar L1/L2."""
         for patch in self.ax.patches[:]:
@@ -682,6 +724,10 @@ def main():
                         help=f"Longitud eslabón 1 en mm (default: {DEFAULT_L1})")
     parser.add_argument("--l2", type=float, default=DEFAULT_L2,
                         help=f"Longitud eslabón 2 en mm (default: {DEFAULT_L2})")
+    parser.add_argument("--gr1", type=float, default=DEFAULT_GR1,
+                        help=f"Relación de reducción motor 1 (default: {DEFAULT_GR1})")
+    parser.add_argument("--gr2", type=float, default=DEFAULT_GR2,
+                        help=f"Relación de reducción motor 2 (default: {DEFAULT_GR2})")
     parser.add_argument("--list-ports", action="store_true",
                         help="Listar puertos seriales disponibles y salir")
     args = parser.parse_args()
@@ -695,6 +741,8 @@ def main():
         baud=args.baud,
         l1=args.l1,
         l2=args.l2,
+        gr1=args.gr1,
+        gr2=args.gr2,
     )
     app.run()
 
