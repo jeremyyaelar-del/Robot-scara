@@ -88,6 +88,13 @@ class ScaraVisualizer:
         # Historial de segmentos capturados (para DXF)
         self._segments: List[List[Tuple[float, float]]] = []
 
+        # Punto de inicio para trazar líneas rectas (None = espera 1er clic)
+        self._line_start: Optional[Tuple[float, float]] = None
+
+        # Lista de líneas rectas trazadas: [(x0,y0), (x1,y1)]
+        self._straight_lines: List[Tuple[Tuple[float, float],
+                                         Tuple[float, float]]] = []
+
         # Flags de control
         self._capturing   = False
         self._running     = True
@@ -123,6 +130,7 @@ class ScaraVisualizer:
         ax_btn_export = self.fig.add_axes([0.76, 0.58, 0.21, 0.06])
         ax_btn_home   = self.fig.add_axes([0.76, 0.50, 0.21, 0.06])
         ax_btn_reset  = self.fig.add_axes([0.76, 0.42, 0.21, 0.06])
+        ax_btn_line   = self.fig.add_axes([0.76, 0.34, 0.21, 0.06])
 
         self.btn_start  = Button(ax_btn_start,  "▶ Iniciar Captura",  **btn_cfg)
         self.btn_stop   = Button(ax_btn_stop,   "■ Detener Captura",  **btn_cfg)
@@ -130,9 +138,11 @@ class ScaraVisualizer:
         self.btn_export = Button(ax_btn_export, "⬇ Exportar DXF",    **btn_cfg)
         self.btn_home   = Button(ax_btn_home,   "⌂ Home",             **btn_cfg)
         self.btn_reset  = Button(ax_btn_reset,  "↺ Reset Contadores", **btn_cfg)
+        self.btn_line   = Button(ax_btn_line,   "↗ Línea Recta",      **btn_cfg)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_clear,
-                    self.btn_export, self.btn_home, self.btn_reset):
+                    self.btn_export, self.btn_home, self.btn_reset,
+                    self.btn_line):
             btn.label.set_color("white")
             btn.label.set_fontsize(9)
 
@@ -142,12 +152,13 @@ class ScaraVisualizer:
         self.btn_export.on_clicked(self._on_export)
         self.btn_home  .on_clicked(self._on_home)
         self.btn_reset .on_clicked(self._on_reset)
+        self.btn_line  .on_clicked(self._on_line_point)
 
         # ── TextBox para L1, L2 ─────────────────────────────────────────
-        ax_l1_lbl = self.fig.add_axes([0.76, 0.33, 0.09, 0.05])
-        ax_l1_box = self.fig.add_axes([0.86, 0.33, 0.11, 0.05])
-        ax_l2_lbl = self.fig.add_axes([0.76, 0.26, 0.09, 0.05])
-        ax_l2_box = self.fig.add_axes([0.86, 0.26, 0.11, 0.05])
+        ax_l1_lbl = self.fig.add_axes([0.76, 0.24, 0.09, 0.05])
+        ax_l1_box = self.fig.add_axes([0.86, 0.24, 0.11, 0.05])
+        ax_l2_lbl = self.fig.add_axes([0.76, 0.17, 0.09, 0.05])
+        ax_l2_box = self.fig.add_axes([0.86, 0.17, 0.11, 0.05])
 
         ax_l1_lbl.set_facecolor("#1e2130"); ax_l1_lbl.axis("off")
         ax_l2_lbl.set_facecolor("#1e2130"); ax_l2_lbl.axis("off")
@@ -166,7 +177,7 @@ class ScaraVisualizer:
         self.tb_l2.on_submit(self._on_l2_change)
 
         # ── Área de información ─────────────────────────────────────────
-        ax_info = self.fig.add_axes([0.76, 0.05, 0.21, 0.18],
+        ax_info = self.fig.add_axes([0.76, 0.03, 0.21, 0.12],
                                     facecolor="#12141f")
         ax_info.axis("off")
         self._info_text = ax_info.text(
@@ -226,6 +237,13 @@ class ScaraVisualizer:
                                            markersize=8, label="Efector final")
         self._dot_origin,   = self.ax.plot([0], [0], "o", color="#ffffff",
                                            markersize=5, label="Base")
+        # Líneas rectas trazadas manualmente (segmentos con separador NaN)
+        self._line_straight_all, = self.ax.plot([], [], "-", color="#ff44ff",
+                                                linewidth=2.0, alpha=0.9,
+                                                label="Líneas rectas")
+        # Marcador del punto inicial de una línea recta en progreso
+        self._dot_line_start, = self.ax.plot([], [], "*", color="#ff44ff",
+                                             markersize=12)
 
         legend = self.ax.legend(loc="upper right", fontsize=7,
                                 facecolor="#1e2130", edgecolor="#444466",
@@ -345,6 +363,8 @@ class ScaraVisualizer:
             cy = list(self._capture_y)
             x, y = self.x, self.y
             t1, t2 = self.theta1, self.theta2
+            sl = list(self._straight_lines)
+            ls = self._line_start
 
         # Trayectoria completa
         self._line_trail.set_data(tx, ty)
@@ -358,12 +378,30 @@ class ScaraVisualizer:
         self._line_link2.set_data([ex, x], [ey, y])
         self._dot_ee.set_data([x], [y])
 
+        # Líneas rectas trazadas (usando NaN como separador de segmentos)
+        if sl:
+            nan = float("nan")
+            xs, ys = [], []
+            for (x0, y0), (x1, y1) in sl:
+                xs += [x0, x1, nan]
+                ys += [y0, y1, nan]
+            self._line_straight_all.set_data(xs, ys)
+        else:
+            self._line_straight_all.set_data([], [])
+
+        # Marcador del punto inicial en espera del segundo clic
+        if ls is not None:
+            self._dot_line_start.set_data([ls[0]], [ls[1]])
+        else:
+            self._dot_line_start.set_data([], [])
+
         # Panel informativo
         self._info_text.set_text(self._info_str(x, y, t1, t2))
 
         return (self._line_trail, self._line_capture,
                 self._line_link1, self._line_link2,
-                self._dot_ee, self._info_text)
+                self._dot_ee, self._line_straight_all,
+                self._dot_line_start, self._info_text)
 
     def _info_str(self, x=None, y=None, t1=None, t2=None) -> str:
         x  = x  if x  is not None else self.x
@@ -430,6 +468,8 @@ class ScaraVisualizer:
             self._segments  = []
             self._total_points   = 0
             self._captured_count = 0
+            self._straight_lines = []
+        self._line_start = None
         self._set_status("Trayectoria limpiada")
 
     def _on_export(self, _event):
@@ -439,18 +479,19 @@ class ScaraVisualizer:
 
         with self._serial_lock:
             segments = [list(s) for s in self._segments]
+            straight = list(self._straight_lines)
             # También incluir captura activa si tiene puntos
             if self._capture_x and len(self._capture_x) >= 2:
                 segments.append(list(zip(self._capture_x, self._capture_y)))
 
-        if not segments:
+        if not segments and not straight:
             self._set_status("Sin trayectoria capturada para exportar")
             return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"scara_trajectory_{ts}.dxf"
         try:
-            self._export_dxf(segments, filename)
+            self._export_dxf(segments, straight, filename)
             self._set_status(f"DXF exportado → {filename}")
         except Exception as exc:
             self._set_status(f"ERROR exportando DXF: {exc}")
@@ -474,6 +515,36 @@ class ScaraVisualizer:
                 self._set_status(f"ERROR enviando RESET: {exc}")
         else:
             self._set_status("No hay conexión serial activa")
+
+    def _on_line_point(self, _event):
+        """Traza una línea recta entre dos posiciones del efector final.
+
+        Primer clic  → marca el punto de inicio (estrella magenta en el plot).
+        Segundo clic → dibuja la línea recta hasta la posición actual y la
+                       guarda como segmento exportable.
+        """
+        with self._serial_lock:
+            x, y = self.x, self.y
+
+        if self._line_start is None:
+            # ── Primer clic: guardar punto de inicio ──────────────────
+            self._line_start = (x, y)
+            self._set_status(
+                f"✦ Punto inicial marcado ({x:.1f}, {y:.1f}) "
+                "– presiona de nuevo para trazar la línea"
+            )
+        else:
+            # ── Segundo clic: crear la línea recta ────────────────────
+            start = self._line_start
+            self._line_start = None
+            with self._serial_lock:
+                self._straight_lines.append((start, (x, y)))
+                # Registrar como segmento de dos puntos para exportación DXF
+                self._segments.append([start, (x, y)])
+            self._set_status(
+                f"↗ Línea recta: ({start[0]:.1f},{start[1]:.1f}) → "
+                f"({x:.1f},{y:.1f})"
+            )
 
     def _on_l1_change(self, text: str):
         try:
@@ -522,7 +593,7 @@ class ScaraVisualizer:
                 pass
 
     # ── Exportación DXF ───────────────────────────────────────────────────
-    def _export_dxf(self, segments: list, filename: str):
+    def _export_dxf(self, segments: list, straight_lines: list, filename: str):
         """Genera un archivo DXF con las trayectorias capturadas."""
         doc = ezdxf.new(dxfversion="R2010")
         doc.units = dxf_units.MM
@@ -530,6 +601,8 @@ class ScaraVisualizer:
         # Capas
         doc.layers.new(name="TRAJECTORY",
                        dxfattribs={"color": 1, "linetype": "CONTINUOUS"})
+        doc.layers.new(name="STRAIGHT_LINES",
+                       dxfattribs={"color": 6, "linetype": "CONTINUOUS"})
         doc.layers.new(name="METADATA",
                        dxfattribs={"color": 7, "linetype": "CONTINUOUS"})
 
@@ -545,12 +618,16 @@ class ScaraVisualizer:
                                dxfattribs={"layer": "TRAJECTORY",
                                            "color": idx % 7 + 1})
 
+        for (x0, y0), (x1, y1) in straight_lines:
+            msp.add_line((float(x0), float(y0)), (float(x1), float(y1)),
+                         dxfattribs={"layer": "STRAIGHT_LINES", "color": 6})
+
         # Texto de metadatos
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         metadata = (
             f"Generado: {ts}  |  "
             f"L1={self.L1:.1f}mm  L2={self.L2:.1f}mm  |  "
-            f"Segmentos={len(segments)}"
+            f"Segmentos={len(segments)}  Líneas rectas={len(straight_lines)}"
         )
         total_pts = sum(len(s) for s in segments)
         msp.add_text(
