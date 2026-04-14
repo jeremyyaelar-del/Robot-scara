@@ -63,6 +63,7 @@ DEFAULT_GR2     = 1.0     # relación de reducción motor 2
 MAX_TRAIL_PTS   = 10_000  # puntos máximos en buffer de trayectoria
 UPDATE_INTERVAL = 30      # ms entre frames de animación
 STAMP_CIRCLE_R  = 5.0     # radio del círculo timbrado (mm) → diámetro 10 mm = 1 cm
+SNAP_RADIUS     = 15.0    # mm – distancia de snap para la herramienta de polilínea
 
 # ══════════════════════════════════════════════════════════════════════════
 class ScaraVisualizer:
@@ -97,11 +98,17 @@ class ScaraVisualizer:
         self._segments: List[List[Tuple[float, float]]] = []
 
         # Punto de inicio para trazar líneas rectas (None = espera 1er clic)
-        self._line_start: Optional[Tuple[float, float]] = None
+        # ELIMINADO – sustituido por la herramienta de polilínea
 
         # Lista de líneas rectas trazadas: [(x0,y0), (x1,y1)]
         self._straight_lines: List[Tuple[Tuple[float, float],
                                          Tuple[float, float]]] = []
+
+        # ── Herramienta de polilínea ────────────────────────────────────────
+        # Nodos añadidos en la sesión actual (en construcción)
+        self._polyline_pts: List[Tuple[float, float]] = []
+        # Nodo al que se haría snap (calculado en _animate, sin lock)
+        self._snap_candidate: Optional[Tuple[float, float]] = None
 
         # Lista de círculos timbrados: [(cx, cy), ...]
         self._stamp_circles: List[Tuple[float, float]] = []
@@ -135,38 +142,41 @@ class ScaraVisualizer:
         # ── Botones ─────────────────────────────────────────────────────
         btn_cfg = dict(color="#2a2d3e", hovercolor="#3a3f5c")
 
-        ax_btn_start  = self.fig.add_axes([0.76, 0.82, 0.21, 0.06])
-        ax_btn_stop   = self.fig.add_axes([0.76, 0.75, 0.21, 0.06])
-        ax_btn_clear  = self.fig.add_axes([0.76, 0.68, 0.21, 0.06])
-        ax_btn_export = self.fig.add_axes([0.76, 0.61, 0.21, 0.06])
-        ax_btn_home   = self.fig.add_axes([0.76, 0.54, 0.21, 0.06])
-        ax_btn_reset  = self.fig.add_axes([0.76, 0.47, 0.21, 0.06])
-        ax_btn_line   = self.fig.add_axes([0.76, 0.40, 0.21, 0.06])
-        ax_btn_circle = self.fig.add_axes([0.76, 0.33, 0.21, 0.06])
+        ax_btn_start    = self.fig.add_axes([0.76, 0.82, 0.21, 0.055])
+        ax_btn_stop     = self.fig.add_axes([0.76, 0.76, 0.21, 0.055])
+        ax_btn_clear    = self.fig.add_axes([0.76, 0.70, 0.21, 0.055])
+        ax_btn_export   = self.fig.add_axes([0.76, 0.64, 0.21, 0.055])
+        ax_btn_home     = self.fig.add_axes([0.76, 0.58, 0.21, 0.055])
+        ax_btn_reset    = self.fig.add_axes([0.76, 0.52, 0.21, 0.055])
+        ax_btn_poly_add = self.fig.add_axes([0.76, 0.46, 0.21, 0.055])
+        ax_btn_poly_end = self.fig.add_axes([0.76, 0.40, 0.21, 0.055])
+        ax_btn_circle   = self.fig.add_axes([0.76, 0.34, 0.21, 0.055])
 
-        self.btn_start  = Button(ax_btn_start,  "▶ Iniciar Captura",  **btn_cfg)
-        self.btn_stop   = Button(ax_btn_stop,   "■ Detener Captura",  **btn_cfg)
-        self.btn_clear  = Button(ax_btn_clear,  "✖ Limpiar",          **btn_cfg)
-        self.btn_export = Button(ax_btn_export, "⬇ Exportar DXF",    **btn_cfg)
-        self.btn_home   = Button(ax_btn_home,   "⌂ Home",             **btn_cfg)
-        self.btn_reset  = Button(ax_btn_reset,  "↺ Reset Contadores", **btn_cfg)
-        self.btn_line   = Button(ax_btn_line,   "↗ Línea Recta",      **btn_cfg)
-        self.btn_circle = Button(ax_btn_circle, "⊙ Círculo 1 cm",     **btn_cfg)
+        self.btn_start    = Button(ax_btn_start,    "▶ Iniciar Captura",  **btn_cfg)
+        self.btn_stop     = Button(ax_btn_stop,     "■ Detener Captura",  **btn_cfg)
+        self.btn_clear    = Button(ax_btn_clear,    "✖ Limpiar",          **btn_cfg)
+        self.btn_export   = Button(ax_btn_export,   "⬇ Exportar DXF",    **btn_cfg)
+        self.btn_home     = Button(ax_btn_home,     "⌂ Home",             **btn_cfg)
+        self.btn_reset    = Button(ax_btn_reset,    "↺ Reset Contadores", **btn_cfg)
+        self.btn_poly_add = Button(ax_btn_poly_add, "✦ Añadir Punto",     **btn_cfg)
+        self.btn_poly_end = Button(ax_btn_poly_end, "⬛ Fin Polilínea",   **btn_cfg)
+        self.btn_circle   = Button(ax_btn_circle,   "⊙ Círculo 1 cm",    **btn_cfg)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_clear,
                     self.btn_export, self.btn_home, self.btn_reset,
-                    self.btn_line, self.btn_circle):
+                    self.btn_poly_add, self.btn_poly_end, self.btn_circle):
             btn.label.set_color("white")
             btn.label.set_fontsize(9)
 
-        self.btn_start .on_clicked(self._on_start)
-        self.btn_stop  .on_clicked(self._on_stop)
-        self.btn_clear .on_clicked(self._on_clear)
-        self.btn_export.on_clicked(self._on_export)
-        self.btn_home  .on_clicked(self._on_home)
-        self.btn_reset .on_clicked(self._on_reset)
-        self.btn_line  .on_clicked(self._on_line_point)
-        self.btn_circle.on_clicked(self._on_circle)
+        self.btn_start   .on_clicked(self._on_start)
+        self.btn_stop    .on_clicked(self._on_stop)
+        self.btn_clear   .on_clicked(self._on_clear)
+        self.btn_export  .on_clicked(self._on_export)
+        self.btn_home    .on_clicked(self._on_home)
+        self.btn_reset   .on_clicked(self._on_reset)
+        self.btn_poly_add.on_clicked(self._on_poly_add)
+        self.btn_poly_end.on_clicked(self._on_poly_end)
+        self.btn_circle  .on_clicked(self._on_circle)
 
         # ── TextBox para L1, L2, G1, G2 ────────────────────────────────
         ax_l1_lbl = self.fig.add_axes([0.76, 0.27, 0.09, 0.045])
@@ -273,9 +283,18 @@ class ScaraVisualizer:
         self._line_straight_all, = self.ax.plot([], [], "-", color="#ff44ff",
                                                 linewidth=2.0, alpha=0.9,
                                                 label="Líneas rectas")
-        # Marcador del punto inicial de una línea recta en progreso
-        self._dot_line_start, = self.ax.plot([], [], "*", color="#ff44ff",
-                                             markersize=12)
+        # ── Herramienta de polilínea ───────────────────────────────────────
+        # Línea de vista previa (en construcción, desde el primer nodo hasta EE)
+        self._line_poly_preview, = self.ax.plot([], [], "--", color="#ff44ff",
+                                                linewidth=1.5, alpha=0.7)
+        # Marcadores de nodos añadidos
+        self._dot_poly_pts, = self.ax.plot([], [], "o", color="#ff44ff",
+                                           markersize=7, markerfacecolor="#ff44ff",
+                                           label="Nodos polilínea")
+        # Indicador de snap (anillo amarillo sobre el nodo objetivo)
+        self._dot_snap, = self.ax.plot([], [], "o", color="#ffff00",
+                                       markersize=16, markerfacecolor="none",
+                                       markeredgewidth=2.5)
         # Círculos timbrados (⊙ 1 cm de diámetro), curvas paramétricas separadas por NaN
         self._line_circles, = self.ax.plot([], [], "-", color="#44ffcc",
                                            linewidth=1.5, alpha=0.9,
@@ -400,7 +419,7 @@ class ScaraVisualizer:
             x, y = self.x, self.y
             t1, t2 = self.theta1, self.theta2
             sl = list(self._straight_lines)
-            ls = self._line_start
+            poly = list(self._polyline_pts)
             sc = list(self._stamp_circles)
 
         # Trayectoria completa
@@ -415,7 +434,7 @@ class ScaraVisualizer:
         self._line_link2.set_data([ex, x], [ey, y])
         self._dot_ee.set_data([x], [y])
 
-        # Líneas rectas trazadas (usando NaN como separador de segmentos)
+        # Líneas rectas finalizadas (usando NaN como separador de segmentos)
         if sl:
             nan = float("nan")
             xs, ys = [], []
@@ -426,11 +445,31 @@ class ScaraVisualizer:
         else:
             self._line_straight_all.set_data([], [])
 
-        # Marcador del punto inicial en espera del segundo clic
-        if ls is not None:
-            self._dot_line_start.set_data([ls[0]], [ls[1]])
+        # ── Herramienta de polilínea en construcción ───────────────────────
+        # Calcular snap: primer nodo dentro de SNAP_RADIUS
+        snap = None
+        if poly:
+            for pt in poly:
+                if math.hypot(x - pt[0], y - pt[1]) <= SNAP_RADIUS:
+                    snap = pt
+                    break
+        self._snap_candidate = snap
+
+        if poly:
+            preview_end = snap if snap is not None else (x, y)
+            pxs = [p[0] for p in poly] + [preview_end[0]]
+            pys = [p[1] for p in poly] + [preview_end[1]]
+            self._line_poly_preview.set_data(pxs, pys)
+            self._dot_poly_pts.set_data([p[0] for p in poly],
+                                        [p[1] for p in poly])
         else:
-            self._dot_line_start.set_data([], [])
+            self._line_poly_preview.set_data([], [])
+            self._dot_poly_pts.set_data([], [])
+
+        if snap is not None:
+            self._dot_snap.set_data([snap[0]], [snap[1]])
+        else:
+            self._dot_snap.set_data([], [])
 
         # Círculos timbrados (curvas paramétricas separadas por NaN)
         if sc:
@@ -450,7 +489,8 @@ class ScaraVisualizer:
         return (self._line_trail, self._line_capture,
                 self._line_link1, self._line_link2,
                 self._dot_ee, self._line_straight_all,
-                self._dot_line_start, self._line_circles, self._info_text)
+                self._line_poly_preview, self._dot_poly_pts,
+                self._dot_snap, self._line_circles, self._info_text)
 
     def _info_str(self, x=None, y=None, t1=None, t2=None) -> str:
         x  = x  if x  is not None else self.x
@@ -510,7 +550,8 @@ class ScaraVisualizer:
             self._captured_count = 0
             self._straight_lines = []
             self._stamp_circles  = []
-        self._line_start = None
+            self._polyline_pts   = []
+        self._snap_candidate = None
         self._set_status("Trayectoria limpiada")
 
     def _on_export(self, _event):
@@ -558,35 +599,47 @@ class ScaraVisualizer:
         else:
             self._set_status("No hay conexión serial activa")
 
-    def _on_line_point(self, _event):
-        """Traza una línea recta entre dos posiciones del efector final.
+    def _on_poly_add(self, _event):
+        """Añade el punto actual del efector a la polilínea en construcción.
 
-        Primer clic  → marca el punto de inicio (estrella magenta en el plot).
-        Segundo clic → dibuja la línea recta hasta la posición actual y la
-                       guarda como segmento exportable.
+        Si el snap está activo (EE cerca de un nodo existente), el nuevo punto
+        se ancla exactamente a ese nodo, permitiendo cerrar figuras con precisión.
+        Cada nuevo punto se conecta automáticamente al anterior con una línea recta.
         """
         with self._serial_lock:
             x, y = self.x, self.y
 
-        if self._line_start is None:
-            # ── Primer clic: guardar punto de inicio ──────────────────
-            self._line_start = (x, y)
+        snap = self._snap_candidate
+        pos = snap if snap is not None else (x, y)
+
+        with self._serial_lock:
+            pts = self._polyline_pts
+            if pts:
+                # Conectar al punto anterior
+                self._straight_lines.append((pts[-1], pos))
+                self._segments.append([pts[-1], pos])
+            pts.append(pos)
+            n = len(pts)
+
+        if snap is not None:
             self._set_status(
-                f"✦ Punto inicial marcado ({x:.1f}, {y:.1f}) "
-                "– presiona de nuevo para trazar la línea"
+                f"⊕ Snap → ({snap[0]:.1f}, {snap[1]:.1f}) – {n} nodo(s)"
             )
         else:
-            # ── Segundo clic: crear la línea recta ────────────────────
-            start = self._line_start
-            self._line_start = None
-            with self._serial_lock:
-                self._straight_lines.append((start, (x, y)))
-                # Registrar como segmento de dos puntos para exportación DXF
-                self._segments.append([start, (x, y)])
             self._set_status(
-                f"↗ Línea recta: ({start[0]:.1f},{start[1]:.1f}) → "
-                f"({x:.1f},{y:.1f})"
+                f"✦ Punto {n} añadido ({pos[0]:.1f}, {pos[1]:.1f})"
             )
+
+    def _on_poly_end(self, _event):
+        """Finaliza la herramienta de polilínea y descarta la sesión actual."""
+        with self._serial_lock:
+            n = len(self._polyline_pts)
+            self._polyline_pts = []
+        self._snap_candidate = None
+        self._set_status(
+            f"⬛ Polilínea finalizada – {n} nodo(s), "
+            f"{max(0, n - 1)} segmento(s) guardado(s)"
+        )
 
     def _on_circle(self, _event):
         """Timbra un círculo de diámetro 1 cm centrado en el efector final."""
