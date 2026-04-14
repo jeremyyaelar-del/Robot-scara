@@ -110,6 +110,12 @@ class ScaraVisualizer:
         # Nodo al que se haría snap (calculado en _animate, sin lock)
         self._snap_candidate: Optional[Tuple[float, float]] = None
 
+        # ── Herramienta de arco (3 puntos) ─────────────────────────────────
+        # Puntos de la sesión actual: P1 (inicio), P2 (referencia), P3 (fin)
+        self._arc_pts: List[Tuple[float, float]] = []
+        # Arcos comprometidos: cada elemento es una lista de (x, y) de la curva
+        self._arcs: List[List[Tuple[float, float]]] = []
+
         # Lista de círculos timbrados: [(cx, cy), ...]
         self._stamp_circles: List[Tuple[float, float]] = []
 
@@ -142,15 +148,16 @@ class ScaraVisualizer:
         # ── Botones ─────────────────────────────────────────────────────
         btn_cfg = dict(color="#2a2d3e", hovercolor="#3a3f5c")
 
-        ax_btn_start    = self.fig.add_axes([0.76, 0.82, 0.21, 0.055])
-        ax_btn_stop     = self.fig.add_axes([0.76, 0.76, 0.21, 0.055])
-        ax_btn_clear    = self.fig.add_axes([0.76, 0.70, 0.21, 0.055])
-        ax_btn_export   = self.fig.add_axes([0.76, 0.64, 0.21, 0.055])
-        ax_btn_home     = self.fig.add_axes([0.76, 0.58, 0.21, 0.055])
-        ax_btn_reset    = self.fig.add_axes([0.76, 0.52, 0.21, 0.055])
-        ax_btn_poly_add = self.fig.add_axes([0.76, 0.46, 0.21, 0.055])
-        ax_btn_poly_end = self.fig.add_axes([0.76, 0.40, 0.21, 0.055])
-        ax_btn_circle   = self.fig.add_axes([0.76, 0.34, 0.21, 0.055])
+        ax_btn_start    = self.fig.add_axes([0.76, 0.82,  0.21, 0.05])
+        ax_btn_stop     = self.fig.add_axes([0.76, 0.765, 0.21, 0.05])
+        ax_btn_clear    = self.fig.add_axes([0.76, 0.71,  0.21, 0.05])
+        ax_btn_export   = self.fig.add_axes([0.76, 0.655, 0.21, 0.05])
+        ax_btn_home     = self.fig.add_axes([0.76, 0.60,  0.21, 0.05])
+        ax_btn_reset    = self.fig.add_axes([0.76, 0.545, 0.21, 0.05])
+        ax_btn_poly_add = self.fig.add_axes([0.76, 0.49,  0.21, 0.05])
+        ax_btn_poly_end = self.fig.add_axes([0.76, 0.435, 0.21, 0.05])
+        ax_btn_arc_add  = self.fig.add_axes([0.76, 0.38,  0.21, 0.05])
+        ax_btn_circle   = self.fig.add_axes([0.76, 0.325, 0.21, 0.05])
 
         self.btn_start    = Button(ax_btn_start,    "▶ Iniciar Captura",  **btn_cfg)
         self.btn_stop     = Button(ax_btn_stop,     "■ Detener Captura",  **btn_cfg)
@@ -160,11 +167,13 @@ class ScaraVisualizer:
         self.btn_reset    = Button(ax_btn_reset,    "↺ Reset Contadores", **btn_cfg)
         self.btn_poly_add = Button(ax_btn_poly_add, "✦ Añadir Punto",     **btn_cfg)
         self.btn_poly_end = Button(ax_btn_poly_end, "⬛ Fin Polilínea",   **btn_cfg)
+        self.btn_arc_add  = Button(ax_btn_arc_add,  "◜ Punto Arco",       **btn_cfg)
         self.btn_circle   = Button(ax_btn_circle,   "⊙ Círculo 1 cm",    **btn_cfg)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_clear,
                     self.btn_export, self.btn_home, self.btn_reset,
-                    self.btn_poly_add, self.btn_poly_end, self.btn_circle):
+                    self.btn_poly_add, self.btn_poly_end,
+                    self.btn_arc_add, self.btn_circle):
             btn.label.set_color("white")
             btn.label.set_fontsize(9)
 
@@ -176,6 +185,7 @@ class ScaraVisualizer:
         self.btn_reset   .on_clicked(self._on_reset)
         self.btn_poly_add.on_clicked(self._on_poly_add)
         self.btn_poly_end.on_clicked(self._on_poly_end)
+        self.btn_arc_add .on_clicked(self._on_arc_add)
         self.btn_circle  .on_clicked(self._on_circle)
 
         # ── TextBox para L1, L2, G1, G2 ────────────────────────────────
@@ -299,6 +309,18 @@ class ScaraVisualizer:
         self._line_circles, = self.ax.plot([], [], "-", color="#44ffcc",
                                            linewidth=1.5, alpha=0.9,
                                            label="Círculos 1 cm")
+        # ── Herramienta de arco ────────────────────────────────────────────
+        # Arcos comprometidos (separados por NaN)
+        self._line_arcs, = self.ax.plot([], [], "-", color="#44aaff",
+                                        linewidth=2.0, alpha=0.9,
+                                        label="Arcos")
+        # Vista previa del arco en construcción
+        self._line_arc_preview, = self.ax.plot([], [], "--", color="#44aaff",
+                                               linewidth=1.5, alpha=0.7)
+        # Puntos de referencia del arco en construcción
+        self._dot_arc_pts, = self.ax.plot([], [], "D", color="#44aaff",
+                                          markersize=7, markerfacecolor="#44aaff",
+                                          label="Pts arco")
 
         legend = self.ax.legend(loc="upper right", fontsize=7,
                                 facecolor="#1e2130", edgecolor="#444466",
@@ -409,6 +431,53 @@ class ScaraVisualizer:
                 self._capture_y.append(y)
                 self._captured_count += 1
 
+    # ── Herramienta de arco – cálculo geométrico ─────────────────────────
+    @staticmethod
+    def _compute_arc_pts(p1: Tuple[float, float],
+                         p2: Tuple[float, float],
+                         p3: Tuple[float, float],
+                         n_pts: int = 64) -> List[Tuple[float, float]]:
+        """Devuelve n_pts puntos del arco de circunferencia que pasa por
+        p1 → p2 → p3 (p2 es el punto intermedio de referencia).
+
+        Si los tres puntos son colineales se devuelven los propios puntos
+        en lugar de un arco.
+        """
+        (ax_c, ay_c), (bx, by), (cx_c, cy_c) = p1, p2, p3
+        D = 2.0 * (ax_c * (by - cy_c) + bx * (cy_c - ay_c) + cx_c * (ay_c - by))
+        if abs(D) < 1e-9:           # puntos colineales → segmento recto
+            return [p1, p2, p3]
+
+        ux = ((ax_c**2 + ay_c**2) * (by - cy_c) +
+              (bx**2  + by**2)    * (cy_c - ay_c) +
+              (cx_c**2 + cy_c**2) * (ay_c - by)) / D
+        uy = ((ax_c**2 + ay_c**2) * (cx_c - bx) +
+              (bx**2  + by**2)    * (ax_c - cx_c) +
+              (cx_c**2 + cy_c**2) * (bx - ax_c)) / D
+        r = math.hypot(ax_c - ux, ay_c - uy)
+
+        a1 = math.atan2(ay_c - uy, ax_c - ux)
+        a2 = math.atan2(by   - uy, bx   - ux)
+        a3 = math.atan2(cy_c - uy, cx_c - ux)
+
+        # Determinar dirección: ver si a2 cae entre a1 y a3 en sentido CCW
+        def _ccw_sweep(start: float, end: float) -> float:
+            d = (end - start) % (2 * math.pi)
+            return d
+
+        sweep_to_2 = _ccw_sweep(a1, a2)
+        sweep_to_3 = _ccw_sweep(a1, a3)
+
+        if sweep_to_2 < sweep_to_3:   # CCW: a1 → a2 → a3
+            angles = np.linspace(a1, a1 + sweep_to_3, n_pts)
+        else:                          # CW: a1 → a2 → a3 en sentido horario
+            sweep_to_3_cw = sweep_to_3 - 2 * math.pi  # negativo
+            angles = np.linspace(a1, a1 + sweep_to_3_cw, n_pts)
+
+        xs = ux + r * np.cos(angles)
+        ys = uy + r * np.sin(angles)
+        return list(zip(xs.tolist(), ys.tolist()))
+
     # ── Animación ─────────────────────────────────────────────────────────
     def _animate(self, _frame):
         with self._serial_lock:
@@ -420,6 +489,8 @@ class ScaraVisualizer:
             t1, t2 = self.theta1, self.theta2
             sl = list(self._straight_lines)
             poly = list(self._polyline_pts)
+            arcs = list(self._arcs)
+            arc_pts = list(self._arc_pts)
             sc = list(self._stamp_circles)
 
         # Trayectoria completa
@@ -471,6 +542,44 @@ class ScaraVisualizer:
         else:
             self._dot_snap.set_data([], [])
 
+        # ── Herramienta de arco ────────────────────────────────────────────
+        # Arcos comprometidos
+        if arcs:
+            nan = float("nan")
+            axs, ays = [], []
+            for curve in arcs:
+                axs += [p[0] for p in curve] + [nan]
+                ays += [p[1] for p in curve] + [nan]
+            self._line_arcs.set_data(axs, ays)
+        else:
+            self._line_arcs.set_data([], [])
+
+        # Vista previa del arco en construcción
+        if arc_pts:
+            pts_with_ee = arc_pts + [(x, y)]
+            if len(pts_with_ee) == 2:
+                # Solo P1 + EE: mostrar línea recta provisional
+                self._line_arc_preview.set_data(
+                    [pts_with_ee[0][0], pts_with_ee[1][0]],
+                    [pts_with_ee[0][1], pts_with_ee[1][1]]
+                )
+            elif len(pts_with_ee) >= 3:
+                # P1, P2 y EE como P3 provisional: mostrar arco
+                preview_curve = self._compute_arc_pts(
+                    pts_with_ee[0], pts_with_ee[1], pts_with_ee[2]
+                )
+                self._line_arc_preview.set_data(
+                    [p[0] for p in preview_curve],
+                    [p[1] for p in preview_curve]
+                )
+            self._dot_arc_pts.set_data(
+                [p[0] for p in arc_pts],
+                [p[1] for p in arc_pts]
+            )
+        else:
+            self._line_arc_preview.set_data([], [])
+            self._dot_arc_pts.set_data([], [])
+
         # Círculos timbrados (curvas paramétricas separadas por NaN)
         if sc:
             nan = float("nan")
@@ -490,7 +599,9 @@ class ScaraVisualizer:
                 self._line_link1, self._line_link2,
                 self._dot_ee, self._line_straight_all,
                 self._line_poly_preview, self._dot_poly_pts,
-                self._dot_snap, self._line_circles, self._info_text)
+                self._dot_snap, self._line_arcs,
+                self._line_arc_preview, self._dot_arc_pts,
+                self._line_circles, self._info_text)
 
     def _info_str(self, x=None, y=None, t1=None, t2=None) -> str:
         x  = x  if x  is not None else self.x
@@ -551,6 +662,8 @@ class ScaraVisualizer:
             self._straight_lines = []
             self._stamp_circles  = []
             self._polyline_pts   = []
+            self._arc_pts        = []
+            self._arcs           = []
         self._snap_candidate = None
         self._set_status("Trayectoria limpiada")
 
@@ -563,18 +676,19 @@ class ScaraVisualizer:
             segments = [list(s) for s in self._segments]
             straight = list(self._straight_lines)
             circles  = list(self._stamp_circles)
+            arcs     = list(self._arcs)
             # También incluir captura activa si tiene puntos
             if self._capture_x and len(self._capture_x) >= 2:
                 segments.append(list(zip(self._capture_x, self._capture_y)))
 
-        if not segments and not straight and not circles:
+        if not segments and not straight and not circles and not arcs:
             self._set_status("Sin trayectoria capturada para exportar")
             return
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"scara_trajectory_{ts}.dxf"
         try:
-            self._export_dxf(segments, straight, circles, filename)
+            self._export_dxf(segments, straight, circles, filename, arcs)
             self._set_status(f"DXF exportado → {filename}")
         except Exception as exc:
             self._set_status(f"ERROR exportando DXF: {exc}")
@@ -640,6 +754,42 @@ class ScaraVisualizer:
             f"⬛ Polilínea finalizada – {n} nodo(s), "
             f"{max(0, n - 1)} segmento(s) guardado(s)"
         )
+
+    def _on_arc_add(self, _event):
+        """Añade el punto actual a la herramienta de arco de 3 puntos.
+
+        1er clic → P1 (inicio del arco)
+        2do clic → P2 (punto de referencia intermedio)
+        3er clic → P3 (fin del arco) → el arco se calcula y se compromete;
+                   el estado se reinicia para trazar otro arco.
+        """
+        with self._serial_lock:
+            x, y = self.x, self.y
+
+        with self._serial_lock:
+            self._arc_pts.append((x, y))
+            n = len(self._arc_pts)
+
+        labels = {1: "P1 inicio", 2: "P2 referencia", 3: "P3 fin"}
+        self._set_status(
+            f"◜ Arco {labels[n]}: ({x:.1f}, {y:.1f})"
+            + (" – añade P2" if n == 1 else
+               " – añade P3" if n == 2 else "")
+        )
+
+        if n == 3:
+            with self._serial_lock:
+                pts = list(self._arc_pts)
+                self._arc_pts = []
+
+            curve = self._compute_arc_pts(pts[0], pts[1], pts[2])
+            with self._serial_lock:
+                self._arcs.append(curve)
+            self._set_status(
+                f"◜ Arco comprometido: P1({pts[0][0]:.1f},{pts[0][1]:.1f}) "
+                f"P2({pts[1][0]:.1f},{pts[1][1]:.1f}) "
+                f"P3({pts[2][0]:.1f},{pts[2][1]:.1f})"
+            )
 
     def _on_circle(self, _event):
         """Timbra un círculo de diámetro 1 cm centrado en el efector final."""
@@ -725,8 +875,10 @@ class ScaraVisualizer:
 
     # ── Exportación DXF ───────────────────────────────────────────────────
     def _export_dxf(self, segments: list, straight_lines: list,
-                    stamp_circles: list, filename: str):
+                    stamp_circles: list, filename: str, arcs: list = None):
         """Genera un archivo DXF con las trayectorias capturadas."""
+        if arcs is None:
+            arcs = []
         doc = ezdxf.new(dxfversion="R2010")
         doc.units = dxf_units.MM
 
@@ -737,6 +889,8 @@ class ScaraVisualizer:
                        dxfattribs={"color": 6, "linetype": "CONTINUOUS"})
         doc.layers.new(name="CIRCLES",
                        dxfattribs={"color": 4, "linetype": "CONTINUOUS"})
+        doc.layers.new(name="ARCS",
+                       dxfattribs={"color": 5, "linetype": "CONTINUOUS"})
         doc.layers.new(name="METADATA",
                        dxfattribs={"color": 7, "linetype": "CONTINUOUS"})
 
@@ -745,9 +899,7 @@ class ScaraVisualizer:
         for idx, seg in enumerate(segments, start=1):
             if len(seg) < 2:
                 continue
-            # Convertir a lista de tuplas (x, y)
             pts = [(float(p[0]), float(p[1])) for p in seg]
-            # Polilínea lightweight (lwpolyline) en el plano XY
             msp.add_lwpolyline(pts, close=False,
                                dxfattribs={"layer": "TRAJECTORY",
                                            "color": idx % 7 + 1})
@@ -760,13 +912,20 @@ class ScaraVisualizer:
             msp.add_circle((float(ccx), float(ccy)), STAMP_CIRCLE_R,
                            dxfattribs={"layer": "CIRCLES", "color": 4})
 
+        for curve in arcs:
+            if len(curve) < 2:
+                continue
+            pts = [(float(p[0]), float(p[1])) for p in curve]
+            msp.add_lwpolyline(pts, close=False,
+                               dxfattribs={"layer": "ARCS", "color": 5})
+
         # Texto de metadatos
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         metadata = (
             f"Generado: {ts}  |  "
             f"L1={self.L1:.1f}mm  L2={self.L2:.1f}mm  |  "
             f"Segmentos={len(segments)}  Líneas rectas={len(straight_lines)}  "
-            f"Círculos={len(stamp_circles)}"
+            f"Círculos={len(stamp_circles)}  Arcos={len(arcs)}"
         )
         msp.add_text(
             metadata,
