@@ -994,9 +994,11 @@ class ScaraVisualizer:
             except Exception as exc:
                 self._set_status(f"ERROR enviando ZU: {exc}")
                 return
-        with self._serial_lock:
-            self.z += step
-        self._set_status(f"▲ Z subido {step:.2f} mm → {self.z:.1f} mm")
+            with self._serial_lock:
+                self.z += step
+            self._set_status(f"▲ Z subido {step:.2f} mm → {self.z:.1f} mm")
+        else:
+            self._set_status("ERROR: Arduino no conectado – ZU no enviado")
 
     def _on_z_down(self, _event):
         """Envía comando ZD al Arduino para bajar el eje Z un paso."""
@@ -1007,9 +1009,11 @@ class ScaraVisualizer:
             except Exception as exc:
                 self._set_status(f"ERROR enviando ZD: {exc}")
                 return
-        with self._serial_lock:
-            self.z -= step
-        self._set_status(f"▼ Z bajado {step:.2f} mm → {self.z:.1f} mm")
+            with self._serial_lock:
+                self.z -= step
+            self._set_status(f"▼ Z bajado {step:.2f} mm → {self.z:.1f} mm")
+        else:
+            self._set_status("ERROR: Arduino no conectado – ZD no enviado")
 
     def _on_z_step_change(self, text: str):
         """Actualiza el paso Z (mm por clic) desde el TextBox."""
