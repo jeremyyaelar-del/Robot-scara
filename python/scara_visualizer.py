@@ -87,6 +87,10 @@ class ScaraVisualizer:
         self.x      = l1 + l2
         self.y      = 0.0
 
+        # Eje Z (controlado independientemente; no hay encoder, se sigue localmente)
+        self.z          = 0.0   # posición Z en mm
+        self._z_step_mm = 1.0   # mm que se mueve por clic en los botones Z
+
         # Trayectoria completa (todos los puntos recibidos)
         self._trail_x: deque = deque(maxlen=MAX_TRAIL_PTS)
         self._trail_y: deque = deque(maxlen=MAX_TRAIL_PTS)
@@ -161,37 +165,43 @@ class ScaraVisualizer:
         # ── Botones ─────────────────────────────────────────────────────
         btn_cfg = dict(color="#2a2d3e", hovercolor="#3a3f5c")
 
-        ax_btn_start    = self.fig.add_axes([0.76, 0.820, 0.21, 0.045])
-        ax_btn_stop     = self.fig.add_axes([0.76, 0.772, 0.21, 0.045])
-        ax_btn_clear    = self.fig.add_axes([0.76, 0.724, 0.21, 0.045])
-        ax_btn_export   = self.fig.add_axes([0.76, 0.676, 0.21, 0.045])
-        ax_btn_home     = self.fig.add_axes([0.76, 0.628, 0.21, 0.045])
-        ax_btn_reset    = self.fig.add_axes([0.76, 0.580, 0.21, 0.045])
-        ax_btn_poly_add = self.fig.add_axes([0.76, 0.532, 0.21, 0.045])
-        ax_btn_poly_end = self.fig.add_axes([0.76, 0.484, 0.21, 0.045])
-        ax_btn_arc_add  = self.fig.add_axes([0.76, 0.436, 0.21, 0.045])
-        ax_btn_circle   = self.fig.add_axes([0.76, 0.388, 0.21, 0.045])
-        ax_btn_circle3p = self.fig.add_axes([0.76, 0.340, 0.21, 0.045])
-        ax_btn_trail    = self.fig.add_axes([0.76, 0.292, 0.21, 0.045])
+        ax_btn_start    = self.fig.add_axes([0.76, 0.816, 0.21, 0.038])
+        ax_btn_stop     = self.fig.add_axes([0.76, 0.774, 0.21, 0.038])
+        ax_btn_clear    = self.fig.add_axes([0.76, 0.732, 0.21, 0.038])
+        ax_btn_export   = self.fig.add_axes([0.76, 0.690, 0.21, 0.038])
+        ax_btn_home     = self.fig.add_axes([0.76, 0.648, 0.21, 0.038])
+        ax_btn_reset    = self.fig.add_axes([0.76, 0.606, 0.21, 0.038])
+        ax_btn_poly_add = self.fig.add_axes([0.76, 0.564, 0.21, 0.038])
+        ax_btn_poly_end = self.fig.add_axes([0.76, 0.522, 0.21, 0.038])
+        ax_btn_arc_add  = self.fig.add_axes([0.76, 0.480, 0.21, 0.038])
+        ax_btn_circle   = self.fig.add_axes([0.76, 0.438, 0.21, 0.038])
+        ax_btn_circle3p = self.fig.add_axes([0.76, 0.396, 0.21, 0.038])
+        ax_btn_trail    = self.fig.add_axes([0.76, 0.354, 0.21, 0.038])
+        # Botones Z: mitad de ancho, misma fila
+        ax_btn_z_up     = self.fig.add_axes([0.76,   0.312, 0.105, 0.038])
+        ax_btn_z_down   = self.fig.add_axes([0.865,  0.312, 0.105, 0.038])
 
         self.btn_start    = Button(ax_btn_start,    "▶ Iniciar Captura",  **btn_cfg)
         self.btn_stop     = Button(ax_btn_stop,     "■ Detener Captura",  **btn_cfg)
         self.btn_clear    = Button(ax_btn_clear,    "✖ Limpiar",          **btn_cfg)
         self.btn_export   = Button(ax_btn_export,   "⬇ Exportar DXF",    **btn_cfg)
         self.btn_home     = Button(ax_btn_home,     "⌂ Home",             **btn_cfg)
-        self.btn_reset    = Button(ax_btn_reset,    "↺ Reset Contadores", **btn_cfg)
+        self.btn_reset    = Button(ax_btn_reset,    "↺ Reset (↑)",        **btn_cfg)
         self.btn_poly_add = Button(ax_btn_poly_add, "✦ Añadir Punto",     **btn_cfg)
         self.btn_poly_end = Button(ax_btn_poly_end, "⬛ Fin Polilínea",   **btn_cfg)
         self.btn_arc_add  = Button(ax_btn_arc_add,  "◜ Punto Arco",       **btn_cfg)
         self.btn_circle   = Button(ax_btn_circle,   "⊙ Círculo 1.0 cm",  **btn_cfg)
         self.btn_circle3p = Button(ax_btn_circle3p, "⊙ Círculo 3P",      **btn_cfg)
         self.btn_trail    = Button(ax_btn_trail,    "👁 Trayectoria ✓",   **btn_cfg)
+        self.btn_z_up     = Button(ax_btn_z_up,     "▲ Subir Z",          **btn_cfg)
+        self.btn_z_down   = Button(ax_btn_z_down,   "▼ Bajar Z",          **btn_cfg)
 
         for btn in (self.btn_start, self.btn_stop, self.btn_clear,
                     self.btn_export, self.btn_home, self.btn_reset,
                     self.btn_poly_add, self.btn_poly_end,
                     self.btn_arc_add, self.btn_circle,
-                    self.btn_circle3p, self.btn_trail):
+                    self.btn_circle3p, self.btn_trail,
+                    self.btn_z_up, self.btn_z_down):
             btn.label.set_color("white")
             btn.label.set_fontsize(9)
 
@@ -207,10 +217,12 @@ class ScaraVisualizer:
         self.btn_circle  .on_clicked(self._on_circle)
         self.btn_circle3p.on_clicked(self._on_circle3p)
         self.btn_trail   .on_clicked(self._on_toggle_trail)
+        self.btn_z_up    .on_clicked(self._on_z_up)
+        self.btn_z_down  .on_clicked(self._on_z_down)
 
         # ── TextBox para diámetro del círculo timbrado ──────────────────
-        ax_diam_lbl = self.fig.add_axes([0.76, 0.256, 0.08, 0.036])
-        ax_diam_box = self.fig.add_axes([0.86, 0.256, 0.11, 0.036])
+        ax_diam_lbl = self.fig.add_axes([0.76, 0.274, 0.08, 0.034])
+        ax_diam_box = self.fig.add_axes([0.86, 0.274, 0.11, 0.034])
         ax_diam_lbl.set_facecolor("#1e2130"); ax_diam_lbl.axis("off")
         ax_diam_lbl.text(0.5, 0.5, "Diám (cm)", ha="center", va="center",
                          color="#44ffcc", fontsize=8)
@@ -219,15 +231,26 @@ class ScaraVisualizer:
         self.tb_diam.label.set_color("#44ffcc")
         self.tb_diam.on_submit(self._on_circle_diam_change)
 
+        # ── TextBox para el paso del eje Z ──────────────────────────────
+        ax_zstep_lbl = self.fig.add_axes([0.76, 0.236, 0.08, 0.034])
+        ax_zstep_box = self.fig.add_axes([0.86, 0.236, 0.11, 0.034])
+        ax_zstep_lbl.set_facecolor("#1e2130"); ax_zstep_lbl.axis("off")
+        ax_zstep_lbl.text(0.5, 0.5, "Paso Z mm", ha="center", va="center",
+                          color="#88ddff", fontsize=8)
+        self.tb_zstep = TextBox(ax_zstep_box, "", initial=str(self._z_step_mm),
+                                color="#2a2d3e", hovercolor="#3a3f5c")
+        self.tb_zstep.label.set_color("#88ddff")
+        self.tb_zstep.on_submit(self._on_z_step_change)
+
         # ── TextBox para L1, L2, G1, G2 ────────────────────────────────
-        ax_l1_lbl = self.fig.add_axes([0.76, 0.215, 0.09, 0.040])
-        ax_l1_box = self.fig.add_axes([0.86, 0.215, 0.11, 0.040])
-        ax_l2_lbl = self.fig.add_axes([0.76, 0.170, 0.09, 0.040])
-        ax_l2_box = self.fig.add_axes([0.86, 0.170, 0.11, 0.040])
-        ax_g1_lbl = self.fig.add_axes([0.76, 0.125, 0.09, 0.040])
-        ax_g1_box = self.fig.add_axes([0.86, 0.125, 0.11, 0.040])
-        ax_g2_lbl = self.fig.add_axes([0.76, 0.080, 0.09, 0.040])
-        ax_g2_box = self.fig.add_axes([0.86, 0.080, 0.11, 0.040])
+        ax_l1_lbl = self.fig.add_axes([0.76, 0.198, 0.09, 0.034])
+        ax_l1_box = self.fig.add_axes([0.86, 0.198, 0.11, 0.034])
+        ax_l2_lbl = self.fig.add_axes([0.76, 0.160, 0.09, 0.034])
+        ax_l2_box = self.fig.add_axes([0.86, 0.160, 0.11, 0.034])
+        ax_g1_lbl = self.fig.add_axes([0.76, 0.122, 0.09, 0.034])
+        ax_g1_box = self.fig.add_axes([0.86, 0.122, 0.11, 0.034])
+        ax_g2_lbl = self.fig.add_axes([0.76, 0.084, 0.09, 0.034])
+        ax_g2_box = self.fig.add_axes([0.86, 0.084, 0.11, 0.034])
 
         ax_l1_lbl.set_facecolor("#1e2130"); ax_l1_lbl.axis("off")
         ax_l2_lbl.set_facecolor("#1e2130"); ax_l2_lbl.axis("off")
@@ -260,7 +283,7 @@ class ScaraVisualizer:
         self.tb_g2.on_submit(self._on_gr2_change)
 
         # ── Área de información ─────────────────────────────────────────
-        ax_info = self.fig.add_axes([0.76, 0.03, 0.21, 0.05],
+        ax_info = self.fig.add_axes([0.76, 0.030, 0.21, 0.050],
                                     facecolor="#12141f")
         ax_info.axis("off")
         self._info_text = ax_info.text(
@@ -447,7 +470,7 @@ class ScaraVisualizer:
             time.sleep(0.02)
 
     def _parse_line(self, line: str):
-        """Analiza una línea del formato 'X:v,Y:v,T1:v,T2:v'."""
+        """Analiza una línea del formato 'X:v,Y:v,T1:v,T2:v[,Z:v]'."""
         try:
             parts = {p.split(":")[0]: float(p.split(":")[1])
                      for p in line.split(",") if ":" in p}
@@ -455,6 +478,7 @@ class ScaraVisualizer:
             y  = parts.get("Y", self.y)
             t1 = parts.get("T1", self.theta1)
             t2 = parts.get("T2", self.theta2)
+            z  = parts.get("Z", self.z)
         except (ValueError, IndexError):
             return
 
@@ -463,6 +487,7 @@ class ScaraVisualizer:
             self.y = y
             self.theta1 = t1
             self.theta2 = t2
+            self.z = z
             self._trail_x.append(x)
             self._trail_y.append(y)
             self._total_points += 1
@@ -527,6 +552,7 @@ class ScaraVisualizer:
             cy = list(self._capture_y)
             x, y = self.x, self.y
             t1, t2 = self.theta1, self.theta2
+            z = self.z
             sl = list(self._straight_lines)
             poly = list(self._polyline_pts)
             arcs = list(self._arcs)
@@ -661,7 +687,7 @@ class ScaraVisualizer:
             self._dot_circle3p_pts.set_data([], [])
 
         # Panel informativo
-        self._info_text.set_text(self._info_str(x, y, t1, t2))
+        self._info_text.set_text(self._info_str(x, y, t1, t2, z))
 
         return (self._line_trail, self._line_capture,
                 self._line_link1, self._line_link2,
@@ -672,11 +698,12 @@ class ScaraVisualizer:
                 self._line_circles, self._line_circle3p,
                 self._dot_circle3p_pts, self._info_text)
 
-    def _info_str(self, x=None, y=None, t1=None, t2=None) -> str:
+    def _info_str(self, x=None, y=None, t1=None, t2=None, z=None) -> str:
         x  = x  if x  is not None else self.x
         y  = y  if y  is not None else self.y
         t1 = t1 if t1 is not None else self.theta1
         t2 = t2 if t2 is not None else self.theta2
+        z  = z  if z  is not None else self.z
 
         # Longitud de la trayectoria capturada
         trail_len = 0.0
@@ -689,6 +716,7 @@ class ScaraVisualizer:
         return (
             f"X:{x:+7.1f}mm  Y:{y:+7.1f}mm\n"
             f"θ1:{t1:+7.1f}°  θ2:{t2:+7.1f}°\n"
+            f"Z:{z:+7.1f}mm\n"
             f"Pts:{self._total_points:<5d} Seg:{len(self._segments)}\n"
         )
 
@@ -956,6 +984,44 @@ class ScaraVisualizer:
         self.fig.canvas.draw_idle()
         state = "visible" if self._trail_visible else "oculta"
         self._set_status(f"Trayectoria fantasma {state}")
+
+    def _on_z_up(self, _event):
+        """Envía comando ZU al Arduino para subir el eje Z un paso."""
+        step = self._z_step_mm
+        if self._serial and self._serial_ok:
+            try:
+                self._serial.write(f"ZU:{step:.2f}\n".encode())
+            except Exception as exc:
+                self._set_status(f"ERROR enviando ZU: {exc}")
+                return
+        with self._serial_lock:
+            self.z += step
+        self._set_status(f"▲ Z subido {step:.2f} mm → {self.z:.1f} mm")
+
+    def _on_z_down(self, _event):
+        """Envía comando ZD al Arduino para bajar el eje Z un paso."""
+        step = self._z_step_mm
+        if self._serial and self._serial_ok:
+            try:
+                self._serial.write(f"ZD:{step:.2f}\n".encode())
+            except Exception as exc:
+                self._set_status(f"ERROR enviando ZD: {exc}")
+                return
+        with self._serial_lock:
+            self.z -= step
+        self._set_status(f"▼ Z bajado {step:.2f} mm → {self.z:.1f} mm")
+
+    def _on_z_step_change(self, text: str):
+        """Actualiza el paso Z (mm por clic) desde el TextBox."""
+        try:
+            val = float(text)
+            if val > 0:
+                self._z_step_mm = val
+                self._set_status(f"Paso Z → {val:.2f} mm/clic")
+            else:
+                self._set_status("ERROR: Paso Z debe ser > 0")
+        except ValueError:
+            self._set_status("ERROR: Paso Z debe ser un número positivo")
 
     def _on_l1_change(self, text: str):
         try:

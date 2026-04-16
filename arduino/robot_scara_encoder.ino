@@ -19,12 +19,15 @@
  * Protocolo serial (115200 baud):
  *   Salida: "X:±ddd.dd,Y:±ddd.dd,T1:±ddd.dd,T2:±ddd.dd\n"
  *   Entrada: 'H' → ejecutar secuencia home
- *            'R' → reset contadores
+ *            'R' → reset contadores (T1=90°, T2=0° – brazo apunta hacia arriba)
  *            'S' → solicitar muestra inmediata
- *            'L1:xxx.x' → establecer longitud eslabón 1 (mm)
- *            'L2:xxx.x' → establecer longitud eslabón 2 (mm)
+ *            'L1:xxx.x'  → establecer longitud eslabón 1 (mm)
+ *            'L2:xxx.x'  → establecer longitud eslabón 2 (mm)
  *            'G1:xxx.xx' → establecer relación de reducción motor 1
  *            'G2:xxx.xx' → establecer relación de reducción motor 2
+ *            'ZU:xxx.xx' → mover eje Z hacia arriba xxx mm
+ *            'ZD:xxx.xx' → mover eje Z hacia abajo xxx mm
+ *            'SZ:xxx.x'  → establecer pasos/mm del eje Z
  */
 
 // ─── Librería de encoders (Paul Stoffregen) ────────────────────────────────
@@ -55,6 +58,19 @@ const int HOME_PIN_2 = 5;
 // LED de estado
 const int LED_PIN = 13;
 
+// ─── Eje Z (TB6600 Driver) ────────────────────────────────────────────────
+const int Z_STEP_PIN = 6;    // STEP- del driver TB6600
+const int Z_DIR_PIN  = 7;    // DIR-  del driver TB6600
+
+// Parámetros del eje Z (ajusta según husillo y microstepping de tu TB6600)
+// Ejemplo: husillo 2 mm/vuelta, motor 200 pasos/vuelta, microstepping 1/8
+//          → STEPS_PER_MM_Z = 200 * 8 / 2 = 800
+float STEPS_PER_MM_Z = 100.0;       // pasos/mm
+const unsigned int Z_STEP_DELAY_US = 500;  // µs entre pulsos (controla velocidad)
+
+// Posición actual del eje Z en pasos (positivo = subido respecto al home)
+long z_steps = 0;
+
 // ─── Objetos de encoder ────────────────────────────────────────────────────
 // La librería Encoder usa interrupciones automáticamente en pines válidos
 Encoder enc1(2, 3);    // Articulación 1: A=2, B=3
@@ -74,6 +90,7 @@ unsigned long lastSampleTime = 0;
 
 // ─── Prototipos ────────────────────────────────────────────────────────────
 void doHome();
+void moveZ(float mm);
 void forwardKinematics(float t1_deg, float t2_deg, float &x, float &y);
 void sendData();
 void processCommand(String cmd);
@@ -86,6 +103,10 @@ void setup() {
     pinMode(HOME_PIN_1, INPUT_PULLUP);
     pinMode(HOME_PIN_2, INPUT_PULLUP);
     pinMode(LED_PIN, OUTPUT);
+    pinMode(Z_STEP_PIN, OUTPUT);
+    pinMode(Z_DIR_PIN,  OUTPUT);
+    digitalWrite(Z_STEP_PIN, LOW);
+    digitalWrite(Z_DIR_PIN,  LOW);
 
     // Parpadeo inicial para indicar arranque
     for (int i = 0; i < 3; i++) {
@@ -110,7 +131,10 @@ void setup() {
     Serial.print(F("  G2="));
     Serial.print(GEAR_RATIO_2, 2);
     Serial.println(F("  Res=2400 cuentas/rev"));
-    Serial.println(F("# Comandos: H=home R=reset S=muestra L1:xxx L2:xxx G1:xxx G2:xxx"));
+    Serial.print(F("# Z: STEP=pin6  DIR=pin7  SZ="));
+    Serial.print(STEPS_PER_MM_Z, 1);
+    Serial.println(F(" pasos/mm"));
+    Serial.println(F("# Comandos: H=home R=reset(↑) S=muestra L1:x L2:x G1:x G2:x ZU:mm ZD:mm SZ:pasos/mm"));
     digitalWrite(LED_PIN, HIGH);
 }
 
@@ -170,7 +194,32 @@ void sendData() {
     Serial.print(F(",T1:"));
     Serial.print(theta1_deg, 2);
     Serial.print(F(",T2:"));
-    Serial.println(theta2_deg, 2);
+    Serial.print(theta2_deg, 2);
+    Serial.print(F(",Z:"));
+    Serial.println((float)z_steps / STEPS_PER_MM_Z, 2);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+/**
+ * Mueve el eje Z la cantidad indicada en milímetros (bloqueante).
+ * mm > 0 → sube (DIR=HIGH), mm < 0 → baja (DIR=LOW).
+ * Actualiza z_steps con el desplazamiento realizado.
+ */
+void moveZ(float mm) {
+    long steps = (long)(mm * STEPS_PER_MM_Z);
+    if (steps == 0) return;
+
+    digitalWrite(Z_DIR_PIN, steps > 0 ? HIGH : LOW);
+    delayMicroseconds(5);   // tiempo de asentamiento de DIR antes del primer pulso
+
+    long absSteps = steps > 0 ? steps : -steps;
+    for (long i = 0; i < absSteps; i++) {
+        digitalWrite(Z_STEP_PIN, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(Z_STEP_PIN, LOW);
+        delayMicroseconds(Z_STEP_DELAY_US);
+    }
+    z_steps += steps;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -223,9 +272,10 @@ void processCommand(String cmd) {
         doHome();
 
     } else if (cmd == "R" || cmd == "r") {
-        enc1.write(0);
+        // Reset: posicionar el origen angular en T1=90° (brazo apunta hacia +Y)
+        enc1.write((long)(COUNTS_PER_REV * GEAR_RATIO_1 / 4.0));
         enc2.write(0);
-        Serial.println(F("# Contadores reseteados"));
+        Serial.println(F("# Contadores reseteados (T1=90°, T2=0° – apunta hacia arriba)"));
 
     } else if (cmd == "S" || cmd == "s") {
         sendData();
@@ -270,6 +320,41 @@ void processCommand(String cmd) {
             Serial.println(GEAR_RATIO_2, 3);
         } else {
             Serial.println(F("# ERROR: G2 debe ser > 0"));
+        }
+
+    } else if (cmd.startsWith("ZU:")) {
+        float mm = cmd.substring(3).toFloat();
+        if (mm > 0.0) {
+            moveZ(mm);
+            Serial.print(F("# Z subido "));
+            Serial.print(mm, 2);
+            Serial.print(F(" mm → pos="));
+            Serial.println((float)z_steps / STEPS_PER_MM_Z, 2);
+        } else {
+            Serial.println(F("# ERROR: ZU necesita un valor > 0"));
+        }
+
+    } else if (cmd.startsWith("ZD:")) {
+        float mm = cmd.substring(3).toFloat();
+        if (mm > 0.0) {
+            moveZ(-mm);
+            Serial.print(F("# Z bajado "));
+            Serial.print(mm, 2);
+            Serial.print(F(" mm → pos="));
+            Serial.println((float)z_steps / STEPS_PER_MM_Z, 2);
+        } else {
+            Serial.println(F("# ERROR: ZD necesita un valor > 0"));
+        }
+
+    } else if (cmd.startsWith("SZ:")) {
+        float val = cmd.substring(3).toFloat();
+        if (val > 0.0) {
+            STEPS_PER_MM_Z = val;
+            Serial.print(F("# STEPS_PER_MM_Z = "));
+            Serial.print(STEPS_PER_MM_Z, 1);
+            Serial.println(F(" pasos/mm"));
+        } else {
+            Serial.println(F("# ERROR: SZ debe ser > 0"));
         }
 
     } else {
