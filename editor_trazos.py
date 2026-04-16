@@ -36,6 +36,9 @@ class EditorTrazos:
     FLATTENING_DISTANCE = 0.5  # mm
     ARC_SEGMENTS = 64
 
+    # Umbral para detectar puntos colineales en círculo por 3 puntos
+    COLLINEARITY_THRESHOLD = 1e-10
+
     def __init__(self, root):
         """
         Inicializa la aplicación del editor de trazos.
@@ -61,6 +64,18 @@ class EditorTrazos:
         self.current_stroke = []  # Trazo actual en progreso
         self.temp_shape = None  # Forma temporal durante el dibujo
         self.shape_start = None  # Punto inicial para formas
+
+        # Diámetro fijo para herramienta círculo
+        self.circle_diameter_var = tk.StringVar(value="5")
+
+        # Estado para herramienta círculo por 3 puntos
+        self.circle3p_points = []
+        self.circle3p_markers = []
+
+        # Líneas fantasmas de seguimiento (entre trazos, no aparecen en DXF)
+        self.ghost_lines = []
+        self.last_end_point = None
+        self.show_ghost_lines = tk.BooleanVar(value=True)
 
         # Configurar la interfaz de usuario
         self._setup_ui()
@@ -96,8 +111,19 @@ class EditorTrazos:
         self._create_tool_button(tools_frame, "🗑️ Borrador", "eraser")
         self._create_tool_button(tools_frame, "📏 Línea", "line")
         self._create_tool_button(tools_frame, "⭕ Círculo", "circle")
+        self._create_tool_button(tools_frame, "⭕ Círculo 3P", "circle3p")
         self._create_tool_button(tools_frame, "▭ Rectángulo", "rectangle")
         self._create_tool_button(tools_frame, "△ Triángulo", "triangle")
+
+        # Botón de alternancia para líneas fantasmas
+        self.ghost_btn = tk.Button(
+            tools_frame, text="👁 Líneas Fantasma ✓",
+            command=self._toggle_ghost_lines,
+            bg=self.button_color, fg="white",
+            activebackground=self.button_active,
+            width=18, height=1
+        )
+        self.ghost_btn.pack(side=tk.LEFT, padx=3)
 
         # Panel izquierdo - Configuración
         left_frame = tk.Frame(self.root, bg=self.panel_color, width=250)
@@ -128,6 +154,16 @@ class EditorTrazos:
                                    bg=self.panel_color, command=self._on_size_scale)
         self.size_scale.set(2)
         self.size_scale.pack(pady=5, padx=10, fill=tk.X)
+
+        # Sección de diámetro para herramienta círculo
+        self._create_section_label(left_frame, "Diámetro Círculo (cm)")
+
+        diameter_frame = tk.Frame(left_frame, bg=self.panel_color)
+        diameter_frame.pack(pady=5, padx=10, fill=tk.X)
+
+        diameter_entry = tk.Entry(diameter_frame, textvariable=self.circle_diameter_var, width=10)
+        diameter_entry.pack(side=tk.LEFT, padx=5)
+        tk.Label(diameter_frame, text="cm", bg=self.panel_color).pack(side=tk.LEFT)
 
         # Sección de color
         self._create_section_label(left_frame, "Color")
@@ -380,7 +416,33 @@ class EditorTrazos:
         elif self.current_tool == "eraser":
             # Iniciar borrado
             self.current_stroke = [(x, y)]
-        elif self.current_tool in ["line", "circle", "rectangle", "triangle"]:
+        elif self.current_tool == "circle":
+            # Crear círculo inmediatamente con diámetro fijo al hacer clic
+            try:
+                diameter_cm = float(self.circle_diameter_var.get())
+                if diameter_cm <= 0:
+                    raise ValueError("El diámetro debe ser mayor que cero")
+            except ValueError:
+                diameter_cm = 5.0
+                self.circle_diameter_var.set("5")
+                messagebox.showwarning(
+                    "Valor inválido",
+                    "El diámetro ingresado no es válido. Se usará 5 cm por defecto."
+                )
+            radius_px = (diameter_cm / 2) * self.PIXELS_PER_CM
+            shape_data = {
+                "type": "circle",
+                "start": (x, y),
+                "end": (x + radius_px, y),
+                "color": self.brush_color,
+                "width": self.brush_size
+            }
+            self.shapes.append(shape_data)
+            self._draw_shape(shape_data)
+            self._add_to_draw_sequence((x, y), (x, y))
+        elif self.current_tool == "circle3p":
+            self._handle_circle3p_click(x, y)
+        elif self.current_tool in ["line", "rectangle", "triangle"]:
             # Guardar punto inicial para formas
             self.shape_start = (x, y)
 
@@ -410,16 +472,16 @@ class EditorTrazos:
                     x - radius, y - radius,
                     x + radius, y + radius
                 )
-                # Eliminar solo elementos que NO sean guías
+                # Eliminar solo elementos que NO sean guías ni fantasmas
                 for item in items:
                     tags = self.canvas.gettags(item)
-                    if "guide" not in tags:
+                    if "guide" not in tags and "ghost" not in tags:
                         self.canvas.delete(item)
                         # También eliminar del almacenamiento si es necesario
                         # (esto se manejará mejor en el futuro)
 
                 self.current_stroke.append((x, y))
-        elif self.current_tool in ["line", "circle", "rectangle", "triangle"]:
+        elif self.current_tool in ["line", "rectangle", "triangle"]:
             # Dibujar forma temporal
             if self.shape_start:
                 # Eliminar forma temporal anterior
@@ -445,12 +507,15 @@ class EditorTrazos:
                     "color": self.brush_color,
                     "width": self.brush_size
                 }
+                start_pt = self.current_stroke[0]
+                end_pt = self.current_stroke[-1]
                 self.strokes.append(stroke_data)
                 self.current_stroke = []
+                self._add_to_draw_sequence(start_pt, end_pt)
         elif self.current_tool == "eraser":
             # No guardar trazos de borrador
             self.current_stroke = []
-        elif self.current_tool in ["line", "circle", "rectangle", "triangle"]:
+        elif self.current_tool in ["line", "rectangle", "triangle"]:
             # Finalizar forma
             if self.shape_start:
                 # Eliminar forma temporal
@@ -458,10 +523,11 @@ class EditorTrazos:
                     self.canvas.delete(self.temp_shape)
                     self.temp_shape = None
 
+                start_pt = self.shape_start
                 # Crear forma final
                 shape_data = {
                     "type": self.current_tool,
-                    "start": self.shape_start,
+                    "start": start_pt,
                     "end": (x, y),
                     "color": self.brush_color,
                     "width": self.brush_size
@@ -469,6 +535,7 @@ class EditorTrazos:
                 self.shapes.append(shape_data)
                 self._draw_shape(shape_data)
                 self.shape_start = None
+                self._add_to_draw_sequence(start_pt, (x, y))
 
     def _draw_shape_preview(self, start, end):
         """Dibuja una vista previa de la forma durante el arrastre."""
@@ -478,13 +545,6 @@ class EditorTrazos:
         if self.current_tool == "line":
             return self.canvas.create_line(x1, y1, x2, y2,
                                           fill=self.brush_color,
-                                          width=self.brush_size)
-        elif self.current_tool == "circle":
-            # Calcular radio
-            radius = math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-            return self.canvas.create_oval(x1 - radius, y1 - radius,
-                                          x1 + radius, y1 + radius,
-                                          outline=self.brush_color,
                                           width=self.brush_size)
         elif self.current_tool == "rectangle":
             return self.canvas.create_rectangle(x1, y1, x2, y2,
@@ -522,6 +582,132 @@ class EditorTrazos:
             mid_x = (x1 + x2) / 2
             points = [mid_x, y1, x1, y2, x2, y2]
             self.canvas.create_polygon(points, outline=color, fill="", width=width)
+
+    # ------------------------------------------------------------------
+    # Herramienta: Círculo por 3 puntos
+    # ------------------------------------------------------------------
+
+    def _handle_circle3p_click(self, x, y):
+        """Maneja los clics para la herramienta de círculo por 3 puntos."""
+        marker_size = 5
+        marker = self.canvas.create_oval(
+            x - marker_size, y - marker_size,
+            x + marker_size, y + marker_size,
+            fill=self.brush_color, outline=self.brush_color,
+            tags="circle3p_marker"
+        )
+        self.circle3p_markers.append(marker)
+        self.circle3p_points.append((x, y))
+
+        if len(self.circle3p_points) == 3:
+            p1, p2, p3 = self.circle3p_points
+            result = self._circle_from_3_points(p1, p2, p3)
+
+            if result:
+                cx, cy, r = result
+                shape_data = {
+                    "type": "circle",
+                    "start": (cx, cy),
+                    "end": (cx + r, cy),
+                    "color": self.brush_color,
+                    "width": self.brush_size
+                }
+                self.shapes.append(shape_data)
+                self._draw_shape(shape_data)
+                self._add_to_draw_sequence((cx, cy), (cx, cy))
+            else:
+                messagebox.showwarning(
+                    "Advertencia",
+                    "Los 3 puntos son colineales. No se puede crear un círculo."
+                )
+
+            # Limpiar marcadores y resetear estado
+            for marker in self.circle3p_markers:
+                self.canvas.delete(marker)
+            self.circle3p_markers = []
+            self.circle3p_points = []
+
+    def _circle_from_3_points(self, p1, p2, p3):
+        """Calcula el círculo que pasa por 3 puntos. Devuelve (cx, cy, r) o None."""
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+
+        # Sistema de ecuaciones: x²+y²+Dx+Ey+F=0
+        # Resolver con regla de Cramer
+        a_mat = [[x1, y1, 1], [x2, y2, 1], [x3, y3, 1]]
+        b_vec = [-(x1**2 + y1**2), -(x2**2 + y2**2), -(x3**2 + y3**2)]
+
+        det = (a_mat[0][0] * (a_mat[1][1]*a_mat[2][2] - a_mat[1][2]*a_mat[2][1]) -
+               a_mat[0][1] * (a_mat[1][0]*a_mat[2][2] - a_mat[1][2]*a_mat[2][0]) +
+               a_mat[0][2] * (a_mat[1][0]*a_mat[2][1] - a_mat[1][1]*a_mat[2][0]))
+
+        if abs(det) < self.COLLINEARITY_THRESHOLD:
+            return None
+
+        det_d = (b_vec[0] * (a_mat[1][1]*a_mat[2][2] - a_mat[1][2]*a_mat[2][1]) -
+                 a_mat[0][1] * (b_vec[1]*a_mat[2][2] - a_mat[1][2]*b_vec[2]) +
+                 a_mat[0][2] * (b_vec[1]*a_mat[2][1] - a_mat[1][1]*b_vec[2]))
+
+        det_e = (a_mat[0][0] * (b_vec[1]*a_mat[2][2] - a_mat[1][2]*b_vec[2]) -
+                 b_vec[0] * (a_mat[1][0]*a_mat[2][2] - a_mat[1][2]*a_mat[2][0]) +
+                 a_mat[0][2] * (a_mat[1][0]*b_vec[2] - b_vec[1]*a_mat[2][0]))
+
+        det_f = (a_mat[0][0] * (a_mat[1][1]*b_vec[2] - b_vec[1]*a_mat[2][1]) -
+                 a_mat[0][1] * (a_mat[1][0]*b_vec[2] - b_vec[1]*a_mat[2][0]) +
+                 b_vec[0] * (a_mat[1][0]*a_mat[2][1] - a_mat[1][1]*a_mat[2][0]))
+
+        d_coef = det_d / det
+        e_coef = det_e / det
+        f_coef = det_f / det
+
+        cx = -d_coef / 2
+        cy = -e_coef / 2
+        discriminant = cx**2 + cy**2 - f_coef
+        if discriminant < 0:
+            return None
+        r = math.sqrt(discriminant)
+        return cx, cy, r
+
+    # ------------------------------------------------------------------
+    # Líneas fantasmas de seguimiento
+    # ------------------------------------------------------------------
+
+    def _add_to_draw_sequence(self, start_pt, end_pt):
+        """Registra un nuevo elemento y dibuja la línea fantasma desde el punto anterior."""
+        if self.last_end_point is not None:
+            ghost = (self.last_end_point, start_pt)
+            self.ghost_lines.append(ghost)
+            if self.show_ghost_lines.get():
+                item = self.canvas.create_line(
+                    ghost[0][0], ghost[0][1], ghost[1][0], ghost[1][1],
+                    fill="#AAAAAA", width=1, dash=(6, 4), tags="ghost"
+                )
+                self.canvas.tag_lower("ghost")
+        self.last_end_point = end_pt
+
+    def _toggle_ghost_lines(self):
+        """Alterna la visibilidad de las líneas fantasmas de seguimiento."""
+        self.show_ghost_lines.set(not self.show_ghost_lines.get())
+        if self.show_ghost_lines.get():
+            self.ghost_btn.config(text="👁 Líneas Fantasma ✓")
+            self._redraw_ghost_lines()
+        else:
+            self.ghost_btn.config(text="👁 Líneas Fantasma ✗")
+            self.canvas.delete("ghost")
+
+    def _redraw_ghost_lines(self):
+        """Redibuja todas las líneas fantasmas almacenadas."""
+        self.canvas.delete("ghost")
+        if not self.show_ghost_lines.get():
+            return
+        for from_pt, to_pt in self.ghost_lines:
+            self.canvas.create_line(
+                from_pt[0], from_pt[1], to_pt[0], to_pt[1],
+                fill="#AAAAAA", width=1, dash=(6, 4), tags="ghost"
+            )
+        if self.ghost_lines:
+            self.canvas.tag_lower("ghost")
 
     def _save_json(self):
         """Guarda los trazos y formas en un archivo JSON."""
@@ -641,9 +827,9 @@ class EditorTrazos:
                 # Configurar unidades en milímetros (estándar para CNC)
                 doc.units = units.MM
 
-                # Crear capas para organización
-                doc.layers.add('STROKES', color=7)  # Blanco
-                doc.layers.add('SHAPES', color=1)   # Rojo
+                # Crear capas para organización (color uniforme ACI=7 para todos los trazos)
+                doc.layers.add('STROKES', color=7)
+                doc.layers.add('SHAPES', color=7)
 
                 # Convertir trazos a polylines DXF
                 for stroke in self.strokes:
@@ -653,10 +839,10 @@ class EditorTrazos:
                                     for x, y in stroke['points']]
 
                         if len(points_mm) > 1:
-                            # Crear LWPOLYLINE para trazos
+                            # Crear LWPOLYLINE para trazos (color uniforme)
                             msp.add_lwpolyline(points_mm, dxfattribs={
                                 'layer': 'STROKES',
-                                'color': self._color_to_aci(stroke['color'])
+                                'color': 7
                             })
 
                 # Convertir formas a entidades DXF
@@ -668,20 +854,18 @@ class EditorTrazos:
                     start_mm = (start_x / self.PIXELS_PER_MM, -start_y / self.PIXELS_PER_MM)
                     end_mm = (end_x / self.PIXELS_PER_MM, -end_y / self.PIXELS_PER_MM)
 
-                    color_aci = self._color_to_aci(shape['color'])
-
                     if shape['type'] == 'line':
                         msp.add_line(start_mm, end_mm, dxfattribs={
                             'layer': 'SHAPES',
-                            'color': color_aci
+                            'color': 7
                         })
 
                     elif shape['type'] == 'circle':
-                        # Calcular radio
+                        # Calcular radio desde start (centro) hasta end (punto en circunferencia)
                         radius = math.sqrt((end_x - start_x)**2 + (end_y - start_y)**2) / self.PIXELS_PER_MM
                         msp.add_circle(start_mm, radius, dxfattribs={
                             'layer': 'SHAPES',
-                            'color': color_aci
+                            'color': 7
                         })
 
                     elif shape['type'] == 'rectangle':
@@ -697,7 +881,7 @@ class EditorTrazos:
                         ]
                         msp.add_lwpolyline(points, close=True, dxfattribs={
                             'layer': 'SHAPES',
-                            'color': color_aci
+                            'color': 7
                         })
 
                     elif shape['type'] == 'triangle':
@@ -711,7 +895,7 @@ class EditorTrazos:
                         ]
                         msp.add_lwpolyline(points_mm, close=True, dxfattribs={
                             'layer': 'SHAPES',
-                            'color': color_aci
+                            'color': 7
                         })
 
                 # Guardar archivo DXF
@@ -957,6 +1141,14 @@ class EditorTrazos:
             self.canvas.delete("all")
             self.strokes = []
             self.shapes = []
+
+            # Resetear estado de líneas fantasmas
+            self.ghost_lines = []
+            self.last_end_point = None
+
+            # Resetear estado de círculo 3 puntos
+            self.circle3p_points = []
+            self.circle3p_markers = []
 
             # Redibujar guías si están activadas
             if self.show_guides.get():
